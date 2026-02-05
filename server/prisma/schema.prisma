@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// 1. Los Vecinos (Usuarios)
+model Usuario {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  nombre    String
+  apellido  String
+  dni       String    @unique
+  telefono  String
+  password  String    // Para la contraseña local
+  reservas  Reserva[]
+  createdAt DateTime  @default(now())
+}
+
+// 2. Los Quinchos (Los 3 edificios)
+model Quincho {
+  id        Int        @id @default(autoincrement())
+  numero    Int        @unique // 1, 2, 3
+  nombre    String     // "Quincho Norte", etc.
+  parrillas Parrilla[]
+}
+
+// 3. Las Parrillas (Las 4 que hay por cada Quincho)
+model Parrilla {
+  id        Int       @id @default(autoincrement())
+  numero    Int       // 1, 2, 3, 4
+  quinchoId Int
+  quincho   Quincho   @relation(fields: [quinchoId], references: [id])
+  reservas  Reserva[]
+
+  @@unique([quinchoId, numero]) // Esto evita que existan dos parrillas "1" en el mismo quincho
+}
+
+// 4. El Turnero (Las Reservas)
+model Reserva {
+  id         Int      @id @default(autoincrement())
+  fecha      DateTime // Guardaremos la fecha del asado
+  turno      String // "DIA" o "NOCHE"
+  usuarioId  Int
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id])
+  parrillaId Int
+  parrilla   Parrilla @relation(fields: [parrillaId], references: [id])
+
+  @@unique([parrillaId, fecha]) // EL CANDADO: Impide que dos personas reserven la misma parrilla el mismo día
+}
