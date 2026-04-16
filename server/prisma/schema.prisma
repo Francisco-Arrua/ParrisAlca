@@ -16,6 +16,8 @@ model Usuario {
   dni       String    @unique
   telefono  String
   password  String    // Para la contraseña local
+  faltas    Int       @default(0)       // Contador de inasistencias
+  suspendido Boolean  @default(false)   // Estado de la cuenta
   reservas  Reserva[]
   createdAt DateTime  @default(now())
 }
@@ -44,10 +46,11 @@ model Reserva {
   id         Int      @id @default(autoincrement())
   fecha      DateTime // Guardaremos la fecha del asado
   turno      String // "DIA" o "NOCHE"
+  estado     String   @default("PENDIENTE") // "PENDIENTE", "PRESENTADO", "AUSENTE"
   usuarioId  Int
   usuario    Usuario  @relation(fields: [usuarioId], references: [id])
   parrillaId Int
   parrilla   Parrilla @relation(fields: [parrillaId], references: [id])
 
-  @@unique([parrillaId, fecha]) // EL CANDADO: Impide que dos personas reserven la misma parrilla el mismo día
+  @@unique([parrillaId, fecha, turno]) // Ahora permite diferentes turnos en la misma parrilla el mismo día
 }

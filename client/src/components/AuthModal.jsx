@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, User, Lock, Mail, CreditCard, Phone } from 'lucide-react';
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+
 const AuthModal = ({ isOpen, onClose, onLoginSuccess }) => {
   const [isRegister, setIsRegister] = useState(false);
   const [formData, setFormData] = useState({
@@ -14,7 +16,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess }) => {
     const endpoint = isRegister ? 'register' : 'login';
     
     try {
-      const response = await fetch(`http://localhost:3001/api/auth/${endpoint}`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),

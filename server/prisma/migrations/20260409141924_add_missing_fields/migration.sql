@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "Reserva" ADD COLUMN     "estado" TEXT NOT NULL DEFAULT 'PENDIENTE';
+
+-- AlterTable
+ALTER TABLE "Usuario" ADD COLUMN     "faltas" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN     "suspendido" BOOLEAN NOT NULL DEFAULT false;
