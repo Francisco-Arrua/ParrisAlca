@@ -9,6 +9,23 @@ const prisma = new PrismaClient();
 
 const JWT_SECRET = "tu_clave_secreta_super_segura_del_pueblo"; // Esto debería ir en el .env
 
+
+// Middleware para verificar si es Admin
+const isAdmin = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: "No autorizado" });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'ADMIN') {
+      return res.status(403).json({ error: "Acceso denegado. Se requiere ser administrador." });
+    }
+    next();
+  } catch (err) {
+    res.status(401).json({ error: "Token inválido" });
+  }
+};
+
 app.use(cors());
 app.use(express.json());
 
@@ -37,7 +54,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// --- RUTA DE LOGIN ---
+// --- RUTA DE LOGIN ACTUALIZADA ---
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -48,10 +65,23 @@ app.post('/api/auth/login', async (req, res) => {
     const passwordValida = await bcrypt.compare(password, usuario.password);
     if (!passwordValida) return res.status(401).json({ error: "Contraseña incorrecta" });
 
-    // Crear el Token de acceso
-    const token = jwt.sign({ id: usuario.id, nombre: usuario.nombre }, JWT_SECRET, { expiresIn: '24h' });
+    // Incluimos el ROLE en el token para que el backend pueda validarlo después
+    const token = jwt.sign(
+      { id: usuario.id, nombre: usuario.nombre, role: usuario.role }, 
+      JWT_SECRET, 
+      { expiresIn: '24h' }
+    );
 
-    res.json({ token, usuario: { id: usuario.id, nombre: usuario.nombre, apellido: usuario.apellido } });
+    // Enviamos el role al frontend para que React sepa qué mostrar
+    res.json({ 
+      token, 
+      usuario: { 
+        id: usuario.id, 
+        nombre: usuario.nombre, 
+        apellido: usuario.apellido,
+        role: usuario.role // <--- IMPORTANTE
+      } 
+    });
   } catch (error) {
     res.status(500).json({ error: "Error en el servidor" });
   }
@@ -59,20 +89,27 @@ app.post('/api/auth/login', async (req, res) => {
 
 // Ruta para ver el estado de todas las parrillas en una fecha específica
 app.get('/api/estado-quinchos', async (req, res) => {
-  const { fecha, turno } = req.query; // Recibimos el turno del frontend
+  const { fecha, turno } = req.query;
 
   try {
-    const fechaFiltro = new Date(fecha + "T00:00:00Z");
+    // 1. Creamos el rango del día completo (de 00:00 a 23:59:59)
+    // Esto asegura que encuentre la reserva sin importar el desfasaje de horas
+    const inicioDia = new Date(fecha);
+    inicioDia.setUTCHours(0, 0, 0, 0);
+
+    const finDia = new Date(fecha);
+    finDia.setUTCHours(23, 59, 59, 999);
 
     const quinchos = await prisma.quincho.findMany({
       include: {
         parrillas: {
           include: {
             reservas: {
-            
-              // Filtramos las reservas que coincidan con la fecha Y el turno solicitado
               where: {
-                fecha: fechaFiltro,
+                fecha: {
+                  gte: inicioDia,
+                  lte: finDia
+                },
                 turno: turno 
               }
             }
@@ -275,4 +312,179 @@ app.post('/api/reservas/checkin', async (req, res) => {
 });
 
 
-app.listen(3001, () => console.log("🚀 Server listo en http://localhost:3001"));
+// --- RUTA PARA CONFIRMACIÓN MANUAL (ADMIN) ---
+app.patch('/api/reservas/confirmar-manual', isAdmin, async (req, res) => {
+  const { fecha, turno, quinchoId } = req.body;
+
+  try {
+    // 1. Normalizar la fecha para la búsqueda
+    const fechaFiltro = new Date(fecha + "T00:00:00Z");
+
+    // 2. Buscar la reserva
+    // Buscamos una reserva en esa fecha, turno y que pertenezca a una parrilla de ese quincho
+    const reserva = await prisma.reserva.findFirst({
+      where: {
+        fecha: fechaFiltro,
+        turno: turno,
+        parrilla: {
+          quinchoId: parseInt(quinchoId)
+        }
+      }
+    });
+
+    if (!reserva) {
+      return res.status(404).json({ error: "No se encontró ninguna reserva para confirmar." });
+    }
+
+    // 3. Actualizar el estado a PRESENTADO
+    await prisma.reserva.update({
+      where: { id: reserva.id },
+      data: { estado: "PRESENTADO" }
+    });
+
+    res.json({ message: "Asistencia confirmada manualmente con éxito." });
+  } catch (error) {
+    console.error("Error en confirmación manual:", error);
+    res.status(500).json({ error: "Error interno al confirmar asistencia." });
+  }
+});
+
+// --- RUTA PARA EL BUSCADOR DEL PANEL ADMIN ---
+
+app.get('/api/admin/reservas', isAdmin, async (req, res) => {
+  const { fecha, turno } = req.query;
+
+  try {
+    const inicioDia = new Date(fecha + "T00:00:00Z");
+    const finDia = new Date(fecha + "T23:59:59Z");
+
+    const whereClause = {
+      fecha: {
+        gte: inicioDia,
+        lte: finDia
+      }
+    };
+
+    if (turno) {
+      whereClause.turno = turno;
+    }
+
+    const reservas = await prisma.reserva.findMany({
+      where: whereClause,
+      include: {
+        usuario: {
+          select: {
+            nombre: true,
+            apellido: true,
+            dni: true
+          }
+        },
+        parrilla: {
+          include: {
+            quincho: true
+          }
+        }
+      }
+    });
+
+    res.json(reservas);
+  } catch (error) {
+    console.error("Error al buscar reservas para admin:", error);
+    res.status(500).json({ error: "Error al obtener las reservas." });
+  }
+});
+
+// --- RUTA PARA BUSCAR USUARIO EN PANEL ADMIN ---
+app.get('/api/admin/usuarios/search', isAdmin, async (req, res) => {
+  const { query } = req.query;
+
+  try {
+    const usuario = await prisma.usuario.findFirst({
+      where: {
+        OR: [
+          { email: { contains: query, mode: 'insensitive' } },
+          { apellido: { contains: query, mode: 'insensitive' } }
+        ]
+      }
+    });
+
+    if (!usuario) {
+      return res.status(404).json({ error: "Usuario no encontrado." });
+    }
+
+    const history = await prisma.reserva.findMany({
+      where: { usuarioId: usuario.id },
+      select: {
+        fecha: true,
+        estado: true
+      },
+      orderBy: { fecha: 'desc' }
+    });
+
+    res.json({
+      user: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        apellido: usuario.apellido,
+        email: usuario.email,
+        suspendido: usuario.suspendido
+      },
+      history: history.map(h => ({
+        fecha: h.fecha.toISOString().split('T')[0],
+        asistio: h.estado === 'PRESENTADO'
+      }))
+    });
+  } catch (error) {
+    console.error("Error al buscar usuario:", error);
+    res.status(500).json({ error: "Error al buscar usuario." });
+  }
+});
+
+// --- RUTA PARA SUSPENDER/LEVANTAR SUSPENSIÓN ---
+app.post('/api/admin/usuarios/:id/suspension', isAdmin, async (req, res) => {
+  const { id } = req.params;
+  const { suspended } = req.body;
+
+  try {
+    await prisma.usuario.update({
+      where: { id: parseInt(id) },
+      data: { suspendido: suspended }
+    });
+
+    res.json({ message: "Estado de suspensión actualizado." });
+  } catch (error) {
+    console.error("Error al actualizar suspensión:", error);
+    res.status(500).json({ error: "Error al actualizar suspensión." });
+  }
+});
+
+
+// Ejemplo de una ruta protegida
+app.get('/api/admin/estadisticas', isAdmin, async (req, res) => {
+  // Solo llega acá si es ADMIN
+  const totalReservas = await prisma.reserva.count();
+  res.json({ totalReservas });
+});
+
+app.get('/api/admin/usuarios', isAdmin, async (req, res) => {
+  try {
+    const usuarios = await prisma.usuario.findMany({
+      select: {
+        id: true,
+        nombre: true,
+        apellido: true,
+        email: true,
+        role: true,
+        suspendido: true
+      },
+      orderBy: { apellido: 'asc' }
+    });
+    res.json(usuarios);
+  } catch (error) {
+    console.error('Error fetching usuarios:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+
+app.listen(3001, () => console.log("Server listo en http://localhost:3001"));

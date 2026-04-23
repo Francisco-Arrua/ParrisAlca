@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ScanQrCode, QrCodeIcon, User, Loader2, MapPin } from 'lucide-react';
+import { ScanQrCode, QrCodeIcon, User, Loader2, MapPin, LogOut } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QrCode from 'react-qr-code';
 import AuthModal from './components/AuthModal';
+import AdminPanel from './components/AdminPanel';
 
 const App = () => {
-  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+  const API_BASE_URL = 'http://localhost:3001';
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [quinchos, setQuinchos] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +19,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [turno, setTurno] = useState('NOCHE');
   const scannerRef = useRef(null);
+  const [view, setView] = useState('MAPA'); // Puede ser 'MAPA' o 'ADMIN'
 
   useEffect(() => {
     const fetchEstado = async () => {
@@ -204,10 +206,29 @@ const App = () => {
     };
   }, [isScannerOpen]);
 
+
+  useEffect(() => {
+    const tokenGuardado = localStorage.getItem('token');
+    const userGuardado = localStorage.getItem('usuario');
+
+    if (tokenGuardado && userGuardado) {
+      setUser(JSON.parse(userGuardado));
+    }
+  }, []);
+
+
+  const handleLogout = () => {
+    setUser(null);
+    setView('MAPA');
+    localStorage.removeItem('token');
+    localStorage.removeItem('usuario');
+  }
+
+
   return (
     <div className="min-h-screen bg-[#f8f9fa] font-sans text-slate-900">
       {/* Navbar Minimalista */}
-      <nav className="bg-white/80 backdrop-blur-md border-b border-stone-200 px-8 py-4 flex justify-between items-center sticky top-0 z-50">
+      <nav className="bg-white/80 backdrop-blur-md border-stone-200 px-8 py-4 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-3">
           <div className="bg-emerald-600 p-2 rounded-xl shadow-lg shadow-emerald-100">
             <MapPin className="text-white" size={20} />
@@ -216,204 +237,206 @@ const App = () => {
             PARRIS ALCA <span className="text-emerald-500">.</span>
           </h1>
         </div>
+
         <div className="flex items-center gap-3">
+          {/* Botón de Panel Admin */}
+          {user?.role === 'ADMIN' && (
+            <button 
+              onClick={() => setView(view === 'MAPA' ? 'ADMIN' : 'MAPA')}
+              className="bg-amber-500 text-white px-4 py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg shadow-amber-100 hover:bg-amber-400 transition-all"
+            >
+              {view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+            </button>
+          )}
+
+          {/* Botón de QR */}
           <button
             onClick={() => setIsScannerOpen(true)}
             className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-full hover:bg-emerald-500 transition-all text-sm font-bold shadow-xl shadow-emerald-200"
           >
             <ScanQrCode size={16} /> ESCANEAR QR
           </button>
-          <button 
-            onClick={() => setIsAuthModalOpen(true)}
-            className="flex items-center gap-2 bg-slate-900 text-white px-6 py-2.5 rounded-full hover:bg-slate-800 transition-all text-sm font-bold shadow-xl shadow-slate-200"
-          >
-            {user ? `Hola, ${user.nombre}` : <><User size={16} /> INGRESAR</>}
-          </button>
+          
+          {/* BOTÓN DE USUARIO / LOGOUT */}
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => !user && setIsAuthModalOpen(true)}
+              className="flex items-center gap-2 bg-slate-900 text-white px-6 py-2.5 rounded-full hover:bg-slate-800 transition-all text-sm font-bold shadow-xl shadow-slate-200"
+            >
+              {user ? `Hola, ${user.nombre}` : <><User size={16} /> INGRESAR</>}
+            </button>
+
+            {/* Botón de Cerrar Sesión: Solo aparece si hay usuario */}
+            {user && (
+              <button 
+                onClick={handleLogout}
+                title="Cerrar Sesión"
+                className="p-2.5 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-200 transition-all shadow-md"
+              >
+                <LogOut size={18} /> {/* Asegurate de importar LogOut de lucide-react */}
+              </button>
+            )}
+          </div>
         </div>
       </nav>
 
-      <main className="max-w-[1600px] mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        
-        {/* Panel de Control Lateral */}
-        <div className="lg:col-span-3 space-y-6">
-          <div className="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4 block">
-              1. Seleccionar Fecha
-            </label>
-            <input 
-              type="date" 
-              className="w-full p-4 bg-stone-50 border-2 border-stone-100 rounded-2xl focus:border-emerald-500 outline-none transition-all font-bold text-slate-700"
-              value={selectedDate}
-              onChange={(e) => {
-                setSelectedDate(e.target.value);
-                setSelectedParrilla(null);
-              }}
-            />
-
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-8 mb-4 block">
-              2. Elegir Turno
-            </label>
-            <div className="flex gap-2 p-1.5 bg-stone-100 rounded-2xl">
-              <button 
-                onClick={() => setTurno('DIA')}
-                className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'DIA' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                ALMUERZO
-              </button>
-              <button 
-                onClick={() => setTurno('NOCHE')}
-                className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'NOCHE' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                CENA
-              </button>
-            </div>
-
-            <div className="mt-10 p-6 rounded-2xl bg-emerald-50/50 border border-emerald-100/50">
-               <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-2">Selección</span>
-               <p className="text-emerald-900 font-bold text-lg">
-                {selectedParrilla ? selectedParrilla.qNom : "Elegí un quincho"}
-               </p>
-            </div>
-
-            <button 
-              onClick={handleReserva}
-              disabled={!selectedParrilla || loading}
-              className={`w-full mt-6 py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${
-                selectedParrilla 
-                ? 'bg-emerald-600 text-white shadow-2xl shadow-emerald-200 hover:translate-y-[-2px] active:translate-y-[0px]' 
-                : 'bg-stone-200 text-stone-400 cursor-not-allowed'
-              }`}
-            >
-              Confirmar Reserva
-            </button>
-          </div>
-        </div>
-
-        {/* El Mapa Interactivo */}
-        <div className="lg:col-span-9">
-          {/* Ajustamos el padding en móvil (p-4) para ganar espacio */}
-          <div className="relative bg-[#e9f0e6] rounded-[2rem] lg:rounded-[3rem] p-4 md:p-12 min-h-[600px] lg:min-h-[700px] shadow-inner overflow-hidden border-4 lg:border-8 border-white">
+      <main className="max-w-[1600px] mx-auto p-6">
+        {view === 'ADMIN' ? (
+          /* VISTA DE ADMINISTRADOR */
+          <AdminPanel API_BASE_URL={API_BASE_URL} />
+        ) : (
+          /* VISTA DEL MAPA (Lo que ya tenías) */
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             
-            {/* Vía del Tren: Adaptativa y Pegada al borde */}
-            <div className="absolute 
-              top-6 left-0 w-full h-auto flex flex-col items-center 
-              lg:top-12 lg:flex-col
-              max-lg:right-0 max-lg:left-auto max-lg:w-8 max-lg:h-full max-lg:top-0 max-lg:justify-center
-              opacity-20 pointer-events-none z-0"
-            >
-                <div className="
-                  flex justify-between 
-                  w-[90%] h-[2px] bg-slate-600 
-                  lg:w-full lg:flex-row
-                  max-lg:h-[90%] max-lg:w-[1px] max-lg:flex-col max-lg:px-0 max-lg:py-4"
-                >
-                    {[...Array(25)].map((_, i) => (
-                      <div key={i} className="
-                        bg-slate-600 
-                        w-[1px] h-3 -translate-y-1
-                        max-lg:w-3 max-lg:h-[1px] max-lg:-translate-x-1"
-                      ></div>
-                    ))}
+            {/* Panel de Control Lateral */}
+            <div className="lg:col-span-3 space-y-6">
+              <div className="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4 block">
+                  1. Seleccionar Fecha
+                </label>
+                <input 
+                  type="date" 
+                  className="w-full p-4 bg-stone-50 border-2 border-stone-100 rounded-2xl focus:border-emerald-500 outline-none transition-all font-bold text-slate-700"
+                  value={selectedDate}
+                  onChange={(e) => {
+                    setSelectedDate(e.target.value);
+                    setSelectedParrilla(null);
+                  }}
+                />
+
+                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-8 mb-4 block">
+                  2. Elegir Turno
+                </label>
+                <div className="flex gap-2 p-1.5 bg-stone-100 rounded-2xl">
+                  <button 
+                    onClick={() => setTurno('DIA')}
+                    className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'DIA' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    ALMUERZO
+                  </button>
+                  <button 
+                    onClick={() => setTurno('NOCHE')}
+                    className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'NOCHE' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
+                  >
+                    CENA
+                  </button>
                 </div>
-                <span className="
-                  text-[9px] font-black tracking-[0.3em] text-slate-700 uppercase
-                  lg:mt-4
-                  max-lg:rotate-90 max-lg:whitespace-nowrap max-lg:absolute max-lg:right-2"
+
+                <div className="mt-10 p-6 rounded-2xl bg-emerald-50/50 border border-emerald-100/50">
+                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-2">Selección</span>
+                   <p className="text-emerald-900 font-bold text-lg">
+                    {selectedParrilla ? selectedParrilla.qNom : "Elegí un quincho"}
+                   </p>
+                </div>
+
+                <button 
+                  onClick={handleReserva}
+                  disabled={!selectedParrilla || loading}
+                  className={`w-full mt-6 py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${
+                    selectedParrilla 
+                    ? 'bg-emerald-600 text-white shadow-2xl shadow-emerald-200 hover:translate-y-[-2px] active:translate-y-[0px]' 
+                    : 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                  }`}
                 >
-                    Vías del Ferrocarril
-                </span>
+                  Confirmar Reserva
+                </button>
+              </div>
             </div>
 
-            {/* Contenido del Mapa */}
-            {/* Reducimos el margen lateral en móvil (pr-10) para no chocar con la vía */}
-            <div className="relative z-10 mt-16 lg:mt-32 max-lg:pr-10 max-lg:pl-2">
-              {loading ? (
-                <div className="flex flex-col items-center justify-center py-40 gap-4">
-                  <Loader2 className="animate-spin text-emerald-600" size={48} />
+            {/* El Mapa Interactivo */}
+            <div className="lg:col-span-9">
+              <div className="relative bg-[#e9f0e6] rounded-[2rem] lg:rounded-[3rem] p-4 md:p-12 min-h-[600px] lg:min-h-[700px] shadow-inner overflow-hidden border-4 lg:border-8 border-white">
+                
+                {/* Vía del Tren */}
+                <div className="absolute top-6 left-0 w-full h-auto flex flex-col items-center lg:top-12 lg:flex-col max-lg:right-0 max-lg:left-auto max-lg:w-8 max-lg:h-full max-lg:top-0 max-lg:justify-center opacity-20 pointer-events-none z-0">
+                    <div className="flex justify-between w-[90%] h-[2px] bg-slate-600 lg:w-full lg:flex-row max-lg:h-[90%] max-lg:w-[1px] max-lg:flex-col max-lg:px-0 max-lg:py-4">
+                        {[...Array(25)].map((_, i) => (
+                          <div key={i} className="bg-slate-600 w-[1px] h-3 -translate-y-1 max-lg:w-3 max-lg:h-[1px] max-lg:-translate-x-1"></div>
+                        ))}
+                    </div>
+                    <span className="text-[9px] font-black tracking-[0.3em] text-slate-700 uppercase lg:mt-4 max-lg:rotate-90 max-lg:whitespace-nowrap max-lg:absolute max-lg:right-2">
+                        Vías del Ferrocarril
+                    </span>
                 </div>
-              ) : (
-                /* Reducimos el gap en móvil para que los quinchos sean más compactos */
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-16">
-                  {quinchos.map((q) => {
-                    // Buscamos si alguna parrilla de este quincho tiene una reserva
-                    const reservaEnQuincho = q.parrillas[0]?.reservas[0]; 
-                    const isOccupied = !!reservaEnQuincho;
-                    const isMyReservation = user && reservaEnQuincho?.usuarioId === user.id;
-                    const isSelected = selectedParrilla?.qId === q.id;
 
-                    return (
-                      <div key={q.id} className="relative group mb-4 lg:mb-0">
-                        {/* Sombra proyectada más pequeña en móvil */}
-                        <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 w-[70%] h-4 bg-black/10 blur-lg rounded-full transition-all duration-500 ${isSelected ? 'scale-110 opacity-30' : 'scale-100 opacity-10'}`}></div>
-                        
-                        {/* Edificio del Quincho: Más pequeño en móvil */}
-                        <div 
-                          onClick={() => !isOccupied && setSelectedParrilla({ qId: q.id, qNom: q.nombre })}
-                          className={`relative aspect-[21/9] md:aspect-[4/3] rounded-2xl lg:rounded-[2rem] transition-all duration-500 cursor-pointer flex flex-col items-center justify-center border-t-2 lg:border-t-4
-                            ${isMyReservation ? 'bg-emerald-50 border-emerald-500 shadow-lg ring-2 ring-emerald-200' : 
-                              isOccupied ? 'bg-slate-200 border-slate-300 grayscale opacity-60' : 
-                              isSelected ? 'bg-white border-emerald-500 scale-[1.02]' : 'bg-white/90 border-transparent'}
-                          `}
-                        >
-                          {/* Etiqueta de estado */}
-                          <div className={`text-[8px] font-black mb-1 uppercase tracking-widest ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
-                            {isMyReservation ? 'TU RESERVA' : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
-                          </div>
+                {/* Contenido del Mapa */}
+                <div className="relative z-10 mt-16 lg:mt-32 max-lg:pr-10 max-lg:pl-2">
+                  {loading ? (
+                    <div className="flex flex-col items-center justify-center py-40 gap-4">
+                      <Loader2 className="animate-spin text-emerald-600" size={48} />
+                      <p className="text-slate-600 font-medium">Cargando quinchos...</p>
+                    </div>
+                  ) : error ? (
+                    <div className="flex flex-col items-center justify-center py-40 gap-4">
+                      <p className="text-red-600 font-medium">{error}</p>
+                      <button 
+                        onClick={() => window.location.reload()} 
+                        className="bg-emerald-600 text-white px-4 py-2 rounded-full font-medium"
+                      >
+                        Reintentar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-16">
+                      {quinchos.map((q) => {
+                        const reservaEnQuincho = q.parrillas[0]?.reservas[0]; 
+                        const isOccupied = !!reservaEnQuincho;
+                        const isMyReservation = user && reservaEnQuincho?.usuarioId === user.id;
+                        const isSelected = selectedParrilla?.qId === q.id;
 
-                          <h3 className="text-base lg:text-xl font-black text-slate-800 uppercase">{q.nombre}</h3>
-                          
-                          {/* Botón de Cancelar (Solo si es mi reserva) */}
-                          {isMyReservation && (
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleCancelar(reservaEnQuincho.id);
-                              }}
-                              className="mt-2 text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"
+                        return (
+                          <div key={q.id} className="relative group mb-4 lg:mb-0">
+                            <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 w-[70%] h-4 bg-black/10 blur-lg rounded-full transition-all duration-500 ${isSelected ? 'scale-110 opacity-30' : 'scale-100 opacity-10'}`}></div>
+                            <div 
+                              onClick={() => !isOccupied && setSelectedParrilla({ qId: q.id, qNom: q.nombre })}
+                              className={`relative aspect-[21/9] md:aspect-[4/3] rounded-2xl lg:rounded-[2rem] transition-all duration-500 cursor-pointer flex flex-col items-center justify-center border-t-2 lg:border-t-4
+                                ${isMyReservation ? 'bg-emerald-50 border-emerald-500 shadow-lg ring-2 ring-emerald-200' : 
+                                  isOccupied ? 'bg-slate-200 border-slate-300 grayscale opacity-60' : 
+                                  isSelected ? 'bg-white border-emerald-500 scale-[1.02]' : 'bg-white/90 border-transparent'}
+                              `}
                             >
-                              Cancelar Reserva
-                            </button>
-                          )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setShowQrFor(q);
-                            }}
-                            className="mt-3 inline-flex items-center gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-tighter rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                          >
-                            <QrCodeIcon size={14} /> Ver QR
-                          </button>
-                        </div>
-
-                        <div className="mt-2 lg:mt-4 text-center">
-                            <span className="bg-emerald-800/10 px-3 py-0.5 rounded-full text-[8px] lg:text-[9px] font-black text-emerald-900/40 uppercase">
-                                Quincho {q.numero}
-                            </span>
-                        </div>
-                      </div>
-                    );
-                  })}
+                              <div className={`text-[8px] font-black mb-1 uppercase tracking-widest ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
+                                {isMyReservation ? 'TU RESERVA' : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
+                              </div>
+                              <h3 className="text-base lg:text-xl font-black text-slate-800 uppercase">{q.nombre}</h3>
+                              {isMyReservation && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); handleCancelar(reservaEnQuincho.id); }}
+                                  className="mt-2 text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"
+                                >
+                                  Cancelar Reserva
+                                </button>
+                              )}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setShowQrFor(q); }}
+                                className="mt-3 inline-flex items-center gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-tighter rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                              >
+                                <QrCodeIcon size={14} /> Ver QR
+                              </button>
+                            </div>
+                            <div className="mt-2 lg:mt-4 text-center">
+                                <span className="bg-emerald-800/10 px-3 py-0.5 rounded-full text-[8px] lg:text-[9px] font-black text-emerald-900/40 uppercase">
+                                    Quincho {q.numero}
+                                </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
-
-            {/* Decoración sutil oculta en móvil para limpieza */}
-            <div className="absolute bottom-6 left-6 w-8 h-8 bg-emerald-200/20 rounded-full blur-md hidden lg:block"></div>
           </div>
-        </div>
+        )}
       </main>
 
+      {/* Modales (Scanner, QR y Auth) - Se mantienen fuera del main */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="relative w-full max-w-2xl rounded-[2rem] bg-white p-6 shadow-2xl">
-            <button
-              onClick={() => setIsScannerOpen(false)}
-              className="absolute right-4 top-4 text-slate-500 hover:text-slate-900"
-            >
-              Cerrar
-            </button>
+            <button onClick={() => setIsScannerOpen(false)} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
             <h2 className="text-xl font-bold text-slate-900 mb-4">Escaneá el QR del quincho</h2>
-            <p className="text-sm text-slate-600 mb-4">Acercá la cámara al código QR que se encuentra en el quincho y autorizá la ubicación para confirmar asistencia.</p>
             <div className="rounded-3xl overflow-hidden border border-slate-200 bg-slate-900">
               <div id="qr-reader" className="w-full h-[360px] bg-black" />
             </div>
@@ -425,19 +448,10 @@ const App = () => {
       {showQrFor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="relative w-full max-w-xl rounded-[2rem] bg-white p-6 shadow-2xl">
-            <button
-              onClick={() => setShowQrFor(null)}
-              className="absolute right-4 top-4 text-slate-500 hover:text-slate-900"
-            >
-              Cerrar
-            </button>
+            <button onClick={() => setShowQrFor(null)} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
             <h2 className="text-xl font-bold text-slate-900 mb-4">QR de asistencia - {showQrFor.nombre}</h2>
-            <p className="text-sm text-slate-600 mb-4">Mostrá este código en el quincho para que el vecino pueda escanearlo y confirmar su llegada.</p>
             <div className="flex justify-center p-6 bg-slate-100 rounded-[2rem]">
               <QrCode value={JSON.stringify({ type: 'quincho-checkin', quinchoId: showQrFor.id })} size={220} />
-            </div>
-            <div className="mt-4 text-sm text-slate-500">
-              <strong>Usa este QR sólo en el quincho {showQrFor.numero}.</strong>
             </div>
           </div>
         </div>

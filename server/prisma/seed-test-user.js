@@ -3,26 +3,35 @@ const bcrypt = require('bcryptjs');
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Creando usuario de prueba...');
+  console.log('Creando usuarios de prueba...');
 
-  // Encriptar contraseña
-  const hashedPassword = await bcrypt.hash('Test123!', 10);
+  const usuariosData = [
+    { nombre: 'Juan', apellido: 'Perez', email: 'test@example.com', dni: '12345678', telefono: '1234567890', role: 'ADMIN' },
+    { nombre: 'Edi', apellido: 'Rodriguez', email: 'edi@example.com', dni: '87654321', telefono: '0987654321', role: 'USER' },
+    { nombre: 'Vika', apellido: 'Gomez', email: 'vika@example.com', dni: '11223344', telefono: '1122334455', role: 'USER' },
+    { nombre: 'Carlos', apellido: 'Lopez', email: 'carlos@example.com', dni: '55667788', telefono: '5566778899', role: 'USER' },
+    { nombre: 'Ana', apellido: 'Martinez', email: 'ana@example.com', dni: '99887766', telefono: '9988776655', role: 'USER' },
+  ];
 
-  // Crear usuario
-  const usuario = await prisma.usuario.upsert({
-    where: { email: 'test@example.com' },
-    update: {},
-    create: {
-      nombre: 'Juan',
-      apellido: 'Perez',
-      email: 'test@example.com',
-      dni: '12345678',
-      telefono: '1234567890',
-      password: hashedPassword,
-    },
-  });
+  for (const u of usuariosData) {
+    const hashedPassword = await bcrypt.hash('Test123!', 10);
 
-  console.log('✅ Usuario creado:', usuario);
+    await prisma.usuario.upsert({
+      where: { email: u.email },
+      update: {},
+      create: {
+        nombre: u.nombre,
+        apellido: u.apellido,
+        email: u.email,
+        dni: u.dni,
+        telefono: u.telefono,
+        password: hashedPassword,
+        role: u.role,
+      },
+    });
+  }
+
+  console.log('✅ Usuarios creados');
 
   // Obtener el primer quincho y parrilla
   const quincho = await prisma.quincho.findFirst();
@@ -47,7 +56,13 @@ async function main() {
       fecha: hoy,
       turno: 'NOCHE',
       estado: 'PENDIENTE',
-      usuarioId: usuario.id,
+      usuarioId: 1, // Asumiendo que el primer usuario es Juan
+      parrillaId: parrilla.id,
+    },
+  });
+
+  console.log('✅ Reserva de prueba creada');
+}
       parrillaId: parrilla.id,
     },
   });
