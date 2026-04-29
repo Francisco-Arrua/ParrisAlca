@@ -26,6 +26,7 @@ const AuthModal = ({ isOpen, onClose, onLoginSuccess }) => {
       if (response.ok) {
         if (!isRegister) {
           localStorage.setItem('token', data.token);
+          localStorage.setItem('usuario', JSON.stringify(data.usuario));
           onLoginSuccess(data.usuario);
         } else {
           alert("Registro exitoso, ahora inicia sesión");

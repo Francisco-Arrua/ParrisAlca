@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ScanQrCode, QrCodeIcon, User, Loader2, MapPin, LogOut } from 'lucide-react';
+import { ScanQrCode, User, Loader2, MapPin, LogOut, Settings } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QrCode from 'react-qr-code';
 import AuthModal from './components/AuthModal';
@@ -18,8 +18,7 @@ const App = () => {
   const [showQrFor, setShowQrFor] = useState(null);
   const [user, setUser] = useState(null);
   const [turno, setTurno] = useState('NOCHE');
-  const scannerRef = useRef(null);
-  const [view, setView] = useState('MAPA'); // Puede ser 'MAPA' o 'ADMIN'
+  const [view, setView] = useState('MAPA');
 
   useEffect(() => {
     const fetchEstado = async () => {
@@ -101,6 +100,7 @@ const App = () => {
   };
 
   const processCheckin = async (quinchoId) => {
+    console.log('Iniciando processCheckin para quinchoId:', quinchoId);
     if (!user) {
       alert("Debés iniciar sesión para confirmar asistencia.");
       setIsScannerOpen(false);
@@ -115,6 +115,7 @@ const App = () => {
     setScanError(null);
 
     try {
+      console.log('Obteniendo geolocalización...');
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
           enableHighAccuracy: true,
@@ -123,6 +124,9 @@ const App = () => {
       });
 
       const { latitude: lat, longitude: lon } = position.coords;
+      console.log('Geolocalización obtenida:', { lat, lon });
+      
+      console.log('Enviando petición de checkin...');
       const response = await fetch(`${API_BASE_URL}/api/reservas/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -137,19 +141,44 @@ const App = () => {
       });
 
       const data = await response.json();
+      console.log('Respuesta del checkin:', { ok: response.ok, data });
+      
       if (response.ok) {
         alert(data.message);
       } else {
         alert(data.error || 'No se pudo confirmar asistencia.');
       }
     } catch (err) {
+      console.error('Error en processCheckin:', err);
       setScanError(err.message || 'No se pudo obtener la ubicación.');
     } finally {
+      console.log('Cerrando scanner...');
       setIsScannerOpen(false);
-      scannerRef.current?.stop().catch(() => null);
-      scannerRef.current = null;
-      const resRefresh = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
-      setQuinchos(await resRefresh.json());
+      try {
+        if (scannerRef.current) {
+          await scannerRef.current.stop();
+          scannerRef.current = null;
+        }
+      } catch (scannerError) {
+        console.error('Error stopping scanner:', scannerError);
+      }
+      
+      // Delay the refresh to avoid conflicts
+      setTimeout(async () => {
+        try {
+          console.log('Refrescando datos...');
+          const resRefresh = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
+          if (resRefresh.ok) {
+            const dataRefresh = await resRefresh.json();
+            console.log('Datos refrescados exitosamente');
+            setQuinchos(dataRefresh);
+          } else {
+            console.error('Error en respuesta de refresh:', resRefresh.status);
+          }
+        } catch (refreshError) {
+          console.error('Error refreshing quinchos data:', refreshError);
+        }
+      }, 1000);
     }
   };
 
@@ -203,11 +232,14 @@ const App = () => {
         scannerRef.current.clear().catch(() => null);
         scannerRef.current = null;
       }
+      const element = document.getElementById('qr-reader');
+      if (element) element.innerHTML = '';
     };
   }, [isScannerOpen]);
 
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
     const tokenGuardado = localStorage.getItem('token');
     const userGuardado = localStorage.getItem('usuario');
 
@@ -220,13 +252,15 @@ const App = () => {
   const handleLogout = () => {
     setUser(null);
     setView('MAPA');
-    localStorage.removeItem('token');
-    localStorage.removeItem('usuario');
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token');
+      localStorage.removeItem('usuario');
+    }
   }
 
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] font-sans text-slate-900">
+    <div className="min-h-screen bg-[#f8f9fa] font-sans text-slate-900 transition-colors">
       {/* Navbar Minimalista */}
       <nav className="bg-white/80 backdrop-blur-md border-stone-200 px-8 py-4 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-3">
@@ -238,32 +272,40 @@ const App = () => {
           </h1>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 lg:gap-3">
           {/* Botón de Panel Admin */}
           {user?.role === 'ADMIN' && (
             <button 
               onClick={() => setView(view === 'MAPA' ? 'ADMIN' : 'MAPA')}
-              className="bg-amber-500 text-white px-4 py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg shadow-amber-100 hover:bg-amber-400 transition-all"
+              className="flex items-center justify-center gap-0 lg:gap-2 bg-amber-500 text-white p-2.5 lg:px-4 lg:py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg shadow-amber-100 hover:bg-amber-400 transition-all"
+              title={view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
             >
-              {view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+              <Settings size={18} />
+              <span className="hidden lg:inline">
+                {view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+              </span>
             </button>
           )}
 
           {/* Botón de QR */}
           <button
             onClick={() => setIsScannerOpen(true)}
-            className="flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-full hover:bg-emerald-500 transition-all text-sm font-bold shadow-xl shadow-emerald-200"
+            className="flex items-center justify-center gap-0 lg:gap-2 bg-emerald-600 text-white p-2.5 lg:px-5 lg:py-2.5 rounded-full hover:bg-emerald-500 transition-all font-bold shadow-xl shadow-emerald-200"
+            title="Escanear QR"
           >
-            <ScanQrCode size={16} /> ESCANEAR QR
+            <ScanQrCode size={18} />
+            <span className="hidden lg:inline text-sm">ESCANEAR QR</span>
           </button>
           
           {/* BOTÓN DE USUARIO / LOGOUT */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 lg:gap-2">
             <button 
               onClick={() => !user && setIsAuthModalOpen(true)}
-              className="flex items-center gap-2 bg-slate-900 text-white px-6 py-2.5 rounded-full hover:bg-slate-800 transition-all text-sm font-bold shadow-xl shadow-slate-200"
+              className="flex items-center justify-center gap-0 lg:gap-2 bg-slate-900 text-white p-2.5 lg:px-6 lg:py-2.5 rounded-full hover:bg-slate-800 transition-all font-bold shadow-xl shadow-slate-200"
+              title={user ? `Hola, ${user.nombre}` : 'Ingresar'}
             >
-              {user ? `Hola, ${user.nombre}` : <><User size={16} /> INGRESAR</>}
+              <User size={18} />
+              <span className="hidden lg:inline text-sm">{user ? `Hola, ${user.nombre}` : 'INGRESAR'}</span>
             </button>
 
             {/* Botón de Cerrar Sesión: Solo aparece si hay usuario */}
@@ -273,7 +315,7 @@ const App = () => {
                 title="Cerrar Sesión"
                 className="p-2.5 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-200 transition-all shadow-md"
               >
-                <LogOut size={18} /> {/* Asegurate de importar LogOut de lucide-react */}
+                <LogOut size={18} />
               </button>
             )}
           </div>
@@ -286,10 +328,10 @@ const App = () => {
           <AdminPanel API_BASE_URL={API_BASE_URL} />
         ) : (
           /* VISTA DEL MAPA (Lo que ya tenías) */
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+          <div className="flex flex-col lg:flex-row gap-8">
             
             {/* Panel de Control Lateral */}
-            <div className="lg:col-span-3 space-y-6">
+            <div className="lg:w-3/12 space-y-6">
               <div className="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
                 <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4 block">
                   1. Seleccionar Fecha
@@ -344,8 +386,8 @@ const App = () => {
             </div>
 
             {/* El Mapa Interactivo */}
-            <div className="lg:col-span-9">
-              <div className="relative bg-[#e9f0e6] rounded-[2rem] lg:rounded-[3rem] p-4 md:p-12 min-h-[600px] lg:min-h-[700px] shadow-inner overflow-hidden border-4 lg:border-8 border-white">
+            <div className="lg:w-9/12">
+              <div className="relative bg-[#e9f0e6] rounded-[2rem] lg:rounded-[3rem] p-4 md:p-12 h-full shadow-inner overflow-hidden border-4 lg:border-8 border-white">
                 
                 {/* Vía del Tren */}
                 <div className="absolute top-6 left-0 w-full h-auto flex flex-col items-center lg:top-12 lg:flex-col max-lg:right-0 max-lg:left-auto max-lg:w-8 max-lg:h-full max-lg:top-0 max-lg:justify-center opacity-20 pointer-events-none z-0">
@@ -360,14 +402,14 @@ const App = () => {
                 </div>
 
                 {/* Contenido del Mapa */}
-                <div className="relative z-10 mt-16 lg:mt-32 max-lg:pr-10 max-lg:pl-2">
+                <div className="relative z-10 max-lg:pr-10 max-lg:pl-2 h-full flex flex-col justify-center">
                   {loading ? (
-                    <div className="flex flex-col items-center justify-center py-40 gap-4">
+                    <div className="flex flex-col items-center justify-center flex-1 gap-4">
                       <Loader2 className="animate-spin text-emerald-600" size={48} />
                       <p className="text-slate-600 font-medium">Cargando quinchos...</p>
                     </div>
                   ) : error ? (
-                    <div className="flex flex-col items-center justify-center py-40 gap-4">
+                    <div className="flex flex-col items-center justify-center flex-1 gap-4">
                       <p className="text-red-600 font-medium">{error}</p>
                       <button 
                         onClick={() => window.location.reload()} 
@@ -385,37 +427,31 @@ const App = () => {
                         const isSelected = selectedParrilla?.qId === q.id;
 
                         return (
-                          <div key={q.id} className="relative group mb-4 lg:mb-0">
+                          <div key={q.id} className="relative group mb-4 lg:mb-0 mx-1 md:mx-2">
                             <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 w-[70%] h-4 bg-black/10 blur-lg rounded-full transition-all duration-500 ${isSelected ? 'scale-110 opacity-30' : 'scale-100 opacity-10'}`}></div>
                             <div 
                               onClick={() => !isOccupied && setSelectedParrilla({ qId: q.id, qNom: q.nombre })}
-                              className={`relative aspect-[21/9] md:aspect-[4/3] rounded-2xl lg:rounded-[2rem] transition-all duration-500 cursor-pointer flex flex-col items-center justify-center border-t-2 lg:border-t-4
+                              className={`relative aspect-[21/9] md:aspect-[4/3] rounded-2xl lg:rounded-[2rem] transition-all duration-500 cursor-pointer flex flex-col items-center justify-center border-t-2 lg:border-t-4 p-2 md:p-4
                                 ${isMyReservation ? 'bg-emerald-50 border-emerald-500 shadow-lg ring-2 ring-emerald-200' : 
                                   isOccupied ? 'bg-slate-200 border-slate-300 grayscale opacity-60' : 
                                   isSelected ? 'bg-white border-emerald-500 scale-[1.02]' : 'bg-white/90 border-transparent'}
                               `}
                             >
-                              <div className={`text-[8px] font-black mb-1 uppercase tracking-widest ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
-                                {isMyReservation ? 'TU RESERVA' : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
+                              <div className={`text-[7px] md:text-[8px] font-black mb-1 uppercase tracking-widest text-center leading-tight ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
+                                {isMyReservation ? (reservaEnQuincho?.asistio ? 'Disfrutando de tu quincho' : 'TU RESERVA') : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
                               </div>
-                              <h3 className="text-base lg:text-xl font-black text-slate-800 uppercase">{q.nombre}</h3>
+                              <h3 className="text-sm md:text-base lg:text-xl font-black text-slate-800 uppercase text-center leading-tight px-1">{q.nombre}</h3>
                               {isMyReservation && (
                                 <button 
                                   onClick={(e) => { e.stopPropagation(); handleCancelar(reservaEnQuincho.id); }}
-                                  className="mt-2 text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"
+                                  className="mt-1 md:mt-2 text-[9px] md:text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"
                                 >
                                   Cancelar Reserva
                                 </button>
                               )}
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setShowQrFor(q); }}
-                                className="mt-3 inline-flex items-center gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-tighter rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                              >
-                                <QrCodeIcon size={14} /> Ver QR
-                              </button>
                             </div>
-                            <div className="mt-2 lg:mt-4 text-center">
-                                <span className="bg-emerald-800/10 px-3 py-0.5 rounded-full text-[8px] lg:text-[9px] font-black text-emerald-900/40 uppercase">
+                            <div className="mt-2 lg:mt-4 text-center px-1">
+                                <span className="bg-emerald-800/10 px-2 md:px-3 py-0.5 rounded-full text-[7px] md:text-[8px] lg:text-[9px] font-black text-emerald-900/40 uppercase">
                                     Quincho {q.numero}
                                 </span>
                             </div>
@@ -435,7 +471,20 @@ const App = () => {
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="relative w-full max-w-2xl rounded-[2rem] bg-white p-6 shadow-2xl">
-            <button onClick={() => setIsScannerOpen(false)} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
+            <button onClick={async () => {
+              try {
+                if (scannerRef.current) {
+                  await scannerRef.current.stop();
+                  await scannerRef.current.clear();
+                  scannerRef.current = null;
+                }
+                const element = document.getElementById('qr-reader');
+                if (element) element.innerHTML = '';
+              } catch (error) {
+                console.error('Error stopping scanner:', error);
+              }
+              setIsScannerOpen(false);
+            }} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
             <h2 className="text-xl font-bold text-slate-900 mb-4">Escaneá el QR del quincho</h2>
             <div className="rounded-3xl overflow-hidden border border-slate-200 bg-slate-900">
               <div id="qr-reader" className="w-full h-[360px] bg-black" />
@@ -445,17 +494,7 @@ const App = () => {
         </div>
       )}
 
-      {showQrFor && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="relative w-full max-w-xl rounded-[2rem] bg-white p-6 shadow-2xl">
-            <button onClick={() => setShowQrFor(null)} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
-            <h2 className="text-xl font-bold text-slate-900 mb-4">QR de asistencia - {showQrFor.nombre}</h2>
-            <div className="flex justify-center p-6 bg-slate-100 rounded-[2rem]">
-              <QrCode value={JSON.stringify({ type: 'quincho-checkin', quinchoId: showQrFor.id })} size={220} />
-            </div>
-          </div>
-        </div>
-      )}
+
 
       <AuthModal 
         isOpen={isAuthModalOpen} 

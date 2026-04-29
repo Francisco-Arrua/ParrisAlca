@@ -131,6 +131,22 @@ app.post('/api/reservas', async (req, res) => {
   const fechaReserva = new Date(fecha + "T00:00:00Z");
 
   try {
+    // Verificar si el usuario está suspendido
+    const userIdNum = typeof usuarioId === 'string' ? parseInt(usuarioId, 10) : usuarioId;
+    
+    const usuario = await prisma.usuario.findUnique({
+      where: { id: userIdNum }
+    });
+    
+    if (!usuario) {
+      return res.status(400).json({ error: "Usuario no encontrado." });
+    }
+    
+    if (usuario.suspendido) {
+      console.log(`Usuario ${usuario.nombre} ${usuario.apellido} está suspendido, bloqueando reserva`);
+      return res.status(400).json({ error: "Tienes una suspensión por no asistir en más de dos oportunidades. Contacta con administración." });
+    }
+
     // el usuario no puede reservar dos quinchos a la vez
     const reservaExistenteTurno = await prisma.reserva.findFirst({
       where: { usuarioId, fecha: fechaReserva, turno }
@@ -473,6 +489,8 @@ app.get('/api/admin/usuarios', isAdmin, async (req, res) => {
         id: true,
         nombre: true,
         apellido: true,
+        dni: true,
+        telefono: true,
         email: true,
         role: true,
         suspendido: true
