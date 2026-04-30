@@ -19,6 +19,7 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [turno, setTurno] = useState('NOCHE');
   const [view, setView] = useState('MAPA');
+  const scannerRef = useRef(null);
 
   useEffect(() => {
     const fetchEstado = async () => {
@@ -99,6 +100,20 @@ const App = () => {
     }
   };
 
+  const cleanupScanner = async () => {
+    try {
+      if (scannerRef.current) {
+        await scannerRef.current.stop().catch(() => null);
+        await scannerRef.current.clear().catch(() => null);
+        scannerRef.current = null;
+      }
+      const element = document.getElementById('qr-reader');
+      if (element) element.innerHTML = '';
+    } catch (cleanupError) {
+      console.warn('Error limpiando el scanner:', cleanupError);
+    }
+  };
+
   const processCheckin = async (quinchoId) => {
     console.log('Iniciando processCheckin para quinchoId:', quinchoId);
     if (!user) {
@@ -154,14 +169,7 @@ const App = () => {
     } finally {
       console.log('Cerrando scanner...');
       setIsScannerOpen(false);
-      try {
-        if (scannerRef.current) {
-          await scannerRef.current.stop();
-          scannerRef.current = null;
-        }
-      } catch (scannerError) {
-        console.error('Error stopping scanner:', scannerError);
-      }
+      await cleanupScanner();
       
       // Delay the refresh to avoid conflicts
       setTimeout(async () => {
@@ -193,21 +201,25 @@ const App = () => {
     const onScanSuccess = async (decodedText) => {
       if (!active) return;
       active = false;
-      try {
-        await html5Qrcode.stop();
-      } catch (error) {
-        console.warn('No se pudo detener el scanner:', error);
-      }
 
       try {
         const payload = JSON.parse(decodedText);
         if (payload?.type === 'quincho-checkin' && payload?.quinchoId) {
+          try {
+            await html5Qrcode.stop();
+            await html5Qrcode.clear();
+          } catch (error) {
+            console.warn('No se pudo detener/limpiar el scanner:', error);
+          }
+          setIsScannerOpen(false);
           await processCheckin(payload.quinchoId);
         } else {
           setScanError('QR no reconocido. Usá el QR oficial del quincho.');
+          active = true;
         }
       } catch (err) {
         setScanError('QR inválido. Intenta de nuevo.');
+        active = true;
       }
     };
 
@@ -227,13 +239,7 @@ const App = () => {
 
     return () => {
       active = false;
-      if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => null);
-        scannerRef.current.clear().catch(() => null);
-        scannerRef.current = null;
-      }
-      const element = document.getElementById('qr-reader');
-      if (element) element.innerHTML = '';
+      cleanupScanner().catch(() => null);
     };
   }, [isScannerOpen]);
 
@@ -438,7 +444,7 @@ const App = () => {
                               `}
                             >
                               <div className={`text-[7px] md:text-[8px] font-black mb-1 uppercase tracking-widest text-center leading-tight ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
-                                {isMyReservation ? (reservaEnQuincho?.asistio ? 'Disfrutando de tu quincho' : 'TU RESERVA') : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
+                                {isMyReservation ? (reservaEnQuincho?.estado === 'PRESENTADO' ? 'Disfrutando de tu quincho' : reservaEnQuincho?.estado === 'AUSENTE' ? 'FALTA' : 'TU RESERVA') : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
                               </div>
                               <h3 className="text-sm md:text-base lg:text-xl font-black text-slate-800 uppercase text-center leading-tight px-1">{q.nombre}</h3>
                               {isMyReservation && (
@@ -472,17 +478,7 @@ const App = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="relative w-full max-w-2xl rounded-[2rem] bg-white p-6 shadow-2xl">
             <button onClick={async () => {
-              try {
-                if (scannerRef.current) {
-                  await scannerRef.current.stop();
-                  await scannerRef.current.clear();
-                  scannerRef.current = null;
-                }
-                const element = document.getElementById('qr-reader');
-                if (element) element.innerHTML = '';
-              } catch (error) {
-                console.error('Error stopping scanner:', error);
-              }
+              await cleanupScanner();
               setIsScannerOpen(false);
             }} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
             <h2 className="text-xl font-bold text-slate-900 mb-4">Escaneá el QR del quincho</h2>

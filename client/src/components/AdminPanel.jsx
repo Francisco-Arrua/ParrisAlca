@@ -253,10 +253,13 @@ const AdminPanel = ({ API_BASE_URL }) => {
                     <p className="text-[10px] font-bold text-emerald-600">{r.parrilla.quincho.nombre} - Turno {r.turno}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    {r.asistio ? 
-                      <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span> : 
+                    {r.estado === 'PRESENTADO' ? (
+                      <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span>
+                    ) : r.estado === 'AUSENTE' ? (
+                      <span className="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">inasistencia</span>
+                    ) : (
                       <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">pendiente</span>
-                    }
+                    )}
                   </div>
                 </div>
               ))}
@@ -282,10 +285,13 @@ const AdminPanel = ({ API_BASE_URL }) => {
                   <p className="text-[10px] font-bold text-emerald-600">{r.parrilla.quincho.nombre} - Turno {r.turno}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {r.asistio ? 
-                    <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span> : 
+                  {r.estado === 'PRESENTADO' ? (
+                    <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span>
+                  ) : r.estado === 'AUSENTE' ? (
+                    <span className="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">inasistencia</span>
+                  ) : (
                     <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">pendiente</span>
-                  }
+                  )}
                 </div>
               </div>
             )) : <p className="text-slate-400 font-bold text-center py-10">No hay reservas para hoy aún.</p>}

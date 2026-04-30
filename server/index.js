@@ -7,8 +7,9 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const prisma = new PrismaClient();
 
-const JWT_SECRET = "tu_clave_secreta_super_segura_del_pueblo"; // Esto debería ir en el .env
+const JWT_SECRET = "CLAVE_INEXISTENTE_AUN"; // Esto debería ir en el .env
 
+const getArgentinaHour = () => (new Date().getUTCHours() - 3 + 24) % 24;
 
 // Middleware para verificar si es Admin
 const isAdmin = (req, res, next) => {
@@ -92,6 +93,8 @@ app.get('/api/estado-quinchos', async (req, res) => {
   const { fecha, turno } = req.query;
 
   try {
+    await markOverdueReservations();
+
     // 1. Creamos el rango del día completo (de 00:00 a 23:59:59)
     // Esto asegura que encuentre la reserva sin importar el desfasaje de horas
     const inicioDia = new Date(fecha);
@@ -131,6 +134,28 @@ app.post('/api/reservas', async (req, res) => {
   const fechaReserva = new Date(fecha + "T00:00:00Z");
 
   try {
+    await markOverdueReservations();
+
+    // Validar que no sea una fecha pasada
+    const hoy = new Date();
+    hoy.setUTCHours(0, 0, 0, 0);
+
+    if (fechaReserva < hoy) {
+      return res.status(400).json({ error: "No puedes reservar fechas pasadas." });
+    }
+
+    // Validar que si es hoy, no haya pasado la hora de inicio del turno
+    if (fechaReserva.getTime() === hoy.getTime()) {
+      const horaInicio = turno === 'DIA' ? 12 : 20;
+      const horaActual = getArgentinaHour();
+
+      if (horaActual >= horaInicio) {
+        return res.status(400).json({ 
+          error: `Ya pasó la hora de inicio del turno. Las reservas para hoy deben hacerse antes de las ${horaInicio}:00.` 
+        });
+      }
+    }
+
     // Verificar si el usuario está suspendido
     const userIdNum = typeof usuarioId === 'string' ? parseInt(usuarioId, 10) : usuarioId;
     
@@ -219,6 +244,8 @@ app.post('/api/reservas', async (req, res) => {
 // --- RUTA PARA CANCELAR RESERVAS ---
 app.delete('/api/reservas/:id', async (req, res) => {
   try {
+    await markOverdueReservations();
+
     const reserva = await prisma.reserva.findUnique({
       where: { id: parseInt(req.params.id) },
     });
@@ -259,6 +286,72 @@ function getDistanceInMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+function getAttendanceDeadline(reservaFecha, turno) {
+  const deadline = new Date(reservaFecha.getTime());
+  if (turno === 'DIA') {
+    // 14:00 Argentina corresponde a 17:00 UTC cuando la fecha se almacena como 00:00 UTC del mismo día
+    deadline.setTime(deadline.getTime() + 17 * 60 * 60 * 1000);
+  } else {
+    // 23:59:59 Argentina corresponde a 02:59:59 UTC del día siguiente
+    deadline.setTime(deadline.getTime() + 26 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000);
+  }
+  return deadline;
+}
+
+async function markOverdueReservations() {
+  const ahora = new Date();
+  const pendientes = await prisma.reserva.findMany({
+    where: { estado: 'PENDIENTE' }
+  });
+
+  const pendientesParaMarcar = pendientes.filter(reserva => {
+    const limite = getAttendanceDeadline(reserva.fecha, reserva.turno);
+    return limite && ahora > limite;
+  });
+
+  if (pendientesParaMarcar.length === 0) {
+    return { marcadas: 0, detalles: [] };
+  }
+
+  const idsParaMarcar = pendientesParaMarcar.map(r => r.id);
+  await prisma.reserva.updateMany({
+    where: { id: { in: idsParaMarcar } },
+    data: { estado: 'AUSENTE' }
+  });
+
+  const usuariosParaActualizar = pendientesParaMarcar.reduce((acc, reserva) => {
+    acc[reserva.usuarioId] = (acc[reserva.usuarioId] || 0) + 1;
+    return acc;
+  }, {});
+
+  const detalles = [];
+  for (const usuarioId of Object.keys(usuariosParaActualizar)) {
+    const incremento = usuariosParaActualizar[usuarioId];
+    const usuario = await prisma.usuario.findUnique({ where: { id: parseInt(usuarioId, 10) } });
+    if (!usuario) continue;
+
+    const nuevosFaltas = usuario.faltas + incremento;
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data: {
+        faltas: { increment: incremento },
+        suspendido: nuevosFaltas >= 2 ? true : usuario.suspendido
+      }
+    });
+
+    detalles.push({
+      usuario: `${usuario.nombre} ${usuario.apellido}`,
+      faltas: incremento,
+      totalFaltas: nuevosFaltas,
+      estado: nuevosFaltas >= 2 ? 'SUSPENDIDO' : 'ACTIVO'
+    });
+  }
+
+  return { marcadas: pendientesParaMarcar.length, detalles };
+}
+
+
+// --- RUTA PARA CHECKIN, ESCANER QR  (CONFIRMAR ASISTENCIA) ---
 app.post('/api/reservas/checkin', async (req, res) => {
   const { reservaId, usuarioId, quinchoId, fecha, turno, lat, lon } = req.body;
 
@@ -285,6 +378,8 @@ app.post('/api/reservas/checkin', async (req, res) => {
   }
 
   try {
+    await markOverdueReservations();
+
     let reserva;
 
     if (reservaId) {
@@ -313,6 +408,10 @@ app.post('/api/reservas/checkin', async (req, res) => {
 
     if (reserva.estado === "PRESENTADO") {
       return res.status(400).json({ error: "La asistencia ya fue confirmada." });
+    }
+
+    if (reserva.estado === "AUSENTE") {
+      return res.status(400).json({ error: "Ya venció el tiempo de checkin. La asistencia quedó como inasistencia." });
     }
 
     await prisma.reserva.update({
@@ -371,6 +470,8 @@ app.get('/api/admin/reservas', isAdmin, async (req, res) => {
   const { fecha, turno } = req.query;
 
   try {
+    await markOverdueReservations();
+
     const inicioDia = new Date(fecha + "T00:00:00Z");
     const finDia = new Date(fecha + "T23:59:59Z");
 
@@ -415,6 +516,7 @@ app.get('/api/admin/usuarios/search', isAdmin, async (req, res) => {
   const { query } = req.query;
 
   try {
+    await markOverdueReservations();
     const usuario = await prisma.usuario.findFirst({
       where: {
         OR: [
