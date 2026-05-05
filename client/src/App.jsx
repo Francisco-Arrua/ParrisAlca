@@ -129,6 +129,13 @@ const App = () => {
 
     setScanError(null);
 
+    // Determinar automáticamente el turno basado en la hora actual (Argentina UTC-3)
+    const ahora = new Date();
+    const horaArgentina = new Date(ahora.getTime() - 3 * 60 * 60 * 1000);
+    const horaActual = horaArgentina.getUTCHours();
+    const turnoAutomatico = (horaActual >= 11 && horaActual < 14) ? 'DIA' : 'NOCHE';
+    console.log(`Hora actual en Argentina: ${horaActual}:00 - Turno detectado: ${turnoAutomatico}`);
+
     try {
       console.log('Obteniendo geolocalización...');
       const position = await new Promise((resolve, reject) => {
@@ -141,15 +148,16 @@ const App = () => {
       const { latitude: lat, longitude: lon } = position.coords;
       console.log('Geolocalización obtenida:', { lat, lon });
       
-      console.log('Enviando petición de checkin...');
+      console.log('Enviando petición de checkin con turno automático:', turnoAutomatico);
+      const fechaCheckin = new Date().toISOString().split('T')[0];
       const response = await fetch(`${API_BASE_URL}/api/reservas/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           usuarioId: user.id,
           quinchoId,
-          fecha: selectedDate,
-          turno,
+          fecha: fechaCheckin,
+          turno: turnoAutomatico,
           lat,
           lon,
         }),
@@ -447,7 +455,7 @@ const App = () => {
                                 {isMyReservation ? (reservaEnQuincho?.estado === 'PRESENTADO' ? 'Disfrutando de tu quincho' : reservaEnQuincho?.estado === 'AUSENTE' ? 'FALTA' : 'TU RESERVA') : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
                               </div>
                               <h3 className="text-sm md:text-base lg:text-xl font-black text-slate-800 uppercase text-center leading-tight px-1">{q.nombre}</h3>
-                              {isMyReservation && (
+                              {isMyReservation && reservaEnQuincho?.estado !== 'PRESENTADO' && (
                                 <button 
                                   onClick={(e) => { e.stopPropagation(); handleCancelar(reservaEnQuincho.id); }}
                                   className="mt-1 md:mt-2 text-[9px] md:text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"

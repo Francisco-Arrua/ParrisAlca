@@ -61,12 +61,6 @@ async function main() {
     },
   });
 
-  console.log('✅ Reserva de prueba creada');
-}
-      parrillaId: parrilla.id,
-    },
-  });
-
   console.log('✅ Reserva de prueba creada:', reserva);
   console.log('\n📋 Credenciales de prueba:');
   console.log('   Email: test@example.com');

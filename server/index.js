@@ -11,6 +11,19 @@ const JWT_SECRET = "CLAVE_INEXISTENTE_AUN"; // Esto debería ir en el .env
 
 const getArgentinaHour = () => (new Date().getUTCHours() - 3 + 24) % 24;
 
+// ✅ FIX: Función centralizada para obtener "hoy" en hora Argentina como fecha UTC 00:00:00
+// El bug original usaba new Date() con setUTCHours(0,0,0,0) que devuelve el día UTC,
+// que después de las 21:00 hora Argentina ya es "mañana" en UTC.
+function getHoyArgentinaUTC() {
+  const ahora = new Date();
+  const ahoraArgentina = new Date(ahora.getTime() - 3 * 60 * 60 * 1000);
+  return new Date(Date.UTC(
+    ahoraArgentina.getUTCFullYear(),
+    ahoraArgentina.getUTCMonth(),
+    ahoraArgentina.getUTCDate()
+  ));
+}
+
 // Middleware para verificar si es Admin
 const isAdmin = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
@@ -121,6 +134,17 @@ app.get('/api/estado-quinchos', async (req, res) => {
       },
       orderBy: { numero: 'asc' }
     });
+
+    // Filtrar reservas expiradas
+    const ahora = new Date();
+    quinchos.forEach(quincho => {
+      quincho.parrillas.forEach(parrilla => {
+        parrilla.reservas = parrilla.reservas.filter(reserva => {
+          const deadline = getAttendanceDeadline(reserva.fecha, reserva.turno);
+          return deadline > ahora;
+        });
+      });
+    });
     
     res.json(quinchos);
   } catch (error) {
@@ -136,9 +160,8 @@ app.post('/api/reservas', async (req, res) => {
   try {
     await markOverdueReservations();
 
-    // Validar que no sea una fecha pasada
-    const hoy = new Date();
-    hoy.setUTCHours(0, 0, 0, 0);
+    // ✅ FIX: Usar función centralizada para calcular "hoy" en Argentina
+    const hoy = getHoyArgentinaUTC();
 
     if (fechaReserva < hoy) {
       return res.status(400).json({ error: "No puedes reservar fechas pasadas." });
@@ -146,7 +169,7 @@ app.post('/api/reservas', async (req, res) => {
 
     // Validar que si es hoy, no haya pasado la hora de inicio del turno
     if (fechaReserva.getTime() === hoy.getTime()) {
-      const horaInicio = turno === 'DIA' ? 12 : 20;
+      const horaInicio = turno === 'DIA' ? 16 : 20;
       const horaActual = getArgentinaHour();
 
       if (horaActual >= horaInicio) {
@@ -179,6 +202,7 @@ app.post('/api/reservas', async (req, res) => {
     if (reservaExistenteTurno) return res.status(400).json({ error: "Ya tienes una reserva para este turno." });
 
     // Verificar si el quincho ya está ocupado en ese turno específico
+    const ahora = new Date();
     const quincho = await prisma.quincho.findUnique({
       where: { id: parseInt(quinchoId) },
       include: {
@@ -195,6 +219,14 @@ app.post('/api/reservas', async (req, res) => {
     if (!quincho) {
       return res.status(400).json({ error: "El quincho no existe." });
     }
+
+    // Filtrar reservas expiradas
+    quincho.parrillas.forEach(parrilla => {
+      parrilla.reservas = parrilla.reservas.filter(reserva => {
+        const deadline = getAttendanceDeadline(reserva.fecha, reserva.turno);
+        return deadline > ahora;
+      });
+    });
 
     const quinchoOcupado = quincho.parrillas.some(p => p.reservas.length > 0);
     if (quinchoOcupado) {
@@ -298,6 +330,42 @@ function getAttendanceDeadline(reservaFecha, turno) {
   return deadline;
 }
 
+// ✅ FIX: Usar getHoyArgentinaUTC() en lugar de calcular hoyUTC con new Date() + setUTCHours
+// El bug original hacía que después de las 21:00 hora Argentina, hoyUTC pasara al día siguiente
+// en UTC, haciendo que la comparación de fechas fallara aunque la reserva fuera "de hoy".
+function canScanQR(reservaFecha, turno) {
+  // ✅ FIX: Calcular "hoy" en hora Argentina correctamente
+  const hoyUTC = getHoyArgentinaUTC();
+  
+  const reservaDayStart = new Date(reservaFecha);
+  reservaDayStart.setUTCHours(0, 0, 0, 0);
+  
+  if (reservaDayStart.getTime() !== hoyUTC.getTime()) {
+    return { canScan: false, reason: "Sólo puedes escanear el QR el día de la reserva" };
+  }
+  
+  // Obtener la hora actual en Argentina
+  const horaActual = getArgentinaHour();
+  
+  if (turno === 'DIA') {
+    // Turno día: 11:00 a 14:00
+    if (horaActual >= 11 && horaActual < 14) {
+      return { canScan: true };
+    } else {
+      return { canScan: false, reason: "El QR del turno día solo se puede escanear entre las 11:00 y las 14:00" };
+    }
+  } else if (turno === 'NOCHE') {
+    // Turno noche: 20:00 a 23:59
+    if (horaActual >= 20 && horaActual < 24) {
+      return { canScan: true };
+    } else {
+      return { canScan: false, reason: "El QR del turno noche solo se puede escanear entre las 20:00 y las 23:59" };
+    }
+  }
+  
+  return { canScan: false, reason: "Turno no válido" };
+}
+
 async function markOverdueReservations() {
   const ahora = new Date();
   const pendientes = await prisma.reserva.findMany({
@@ -363,7 +431,7 @@ app.post('/api/reservas/checkin', async (req, res) => {
 
   // Validación de seguridad por si te olvidas de ponerlas en el .env
   if (isNaN(PREDIO_LAT) || isNaN(PREDIO_LON)) {
-    console.error("❌ ERROR: No se encontraron las coordenadas en el archivo .env");
+    console.error("ERROR: No se encontraron las coordenadas en el archivo .env");
   }
 
   if (!lat || !lon) {
@@ -384,20 +452,128 @@ app.post('/api/reservas/checkin', async (req, res) => {
 
     if (reservaId) {
       console.log('Buscando reserva por ID:', reservaId);
-      reserva = await prisma.reserva.findUnique({ where: { id: parseInt(reservaId) } });
-    } else if (usuarioId && quinchoId && fecha && turno) {
-      const fechaReserva = new Date(fecha + "T00:00:00Z");
-      console.log('Buscando reserva por datos:', { usuarioId: parseInt(usuarioId), fecha: fechaReserva, turno, quinchoId: parseInt(quinchoId) });
-      reserva = await prisma.reserva.findFirst({
-        where: {
-          usuarioId: parseInt(usuarioId),
-          fecha: fechaReserva,
-          turno,
+      reserva = await prisma.reserva.findUnique({
+        where: { id: parseInt(reservaId) },
+        // ✅ FIX: Incluir parrilla para tener todos los datos necesarios en validaciones posteriores
+        include: {
           parrilla: {
-            quinchoId: parseInt(quinchoId)
+            include: {
+              quincho: true
+            }
           }
         }
       });
+    } else if (usuarioId && quinchoId) {
+      const usuarioIdNum = parseInt(usuarioId, 10);
+      const quinchoIdNum = parseInt(quinchoId, 10);
+
+      let fechaReserva;
+      if (fecha && typeof fecha === 'string' && fecha.includes('/')) {
+        const [dia, mes, anio] = fecha.split('/');
+        fechaReserva = new Date(`${anio}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}T00:00:00Z`);
+        console.log('Fecha parseada desde DD/MM/YYYY:', fecha, '->', fechaReserva);
+      } else if (fecha && typeof fecha === 'string') {
+        fechaReserva = new Date(fecha + "T00:00:00Z");
+        console.log('Fecha parseada desde YYYY-MM-DD:', fecha, '->', fechaReserva);
+      } else {
+        // ✅ FIX: Usar getHoyArgentinaUTC() para que la fecha actual sea correcta en Argentina
+        fechaReserva = getHoyArgentinaUTC();
+        console.log('Fecha no enviada o inválida, usando fecha actual Argentina UTC:', fechaReserva);
+      }
+
+      const inicioDia = new Date(fechaReserva);
+      inicioDia.setUTCHours(0, 0, 0, 0);
+      const finDia = new Date(fechaReserva);
+      finDia.setUTCHours(23, 59, 59, 999);
+
+      // Si se especifica turno, buscar con turno exacto primero
+      if (turno) {
+        const turnoStr = String(turno).toUpperCase();
+        console.log('Buscando reserva por datos:', { usuarioId: usuarioIdNum, fechaInicio: inicioDia, fechaFin: finDia, turno: turnoStr, quinchoId: quinchoIdNum });
+        reserva = await prisma.reserva.findFirst({
+          where: {
+            usuarioId: usuarioIdNum,
+            turno: turnoStr,
+            fecha: {
+              gte: inicioDia,
+              lte: finDia,
+            },
+            parrilla: {
+              quinchoId: quinchoIdNum
+            }
+          },
+          include: {
+            parrilla: {
+              include: {
+                quincho: true
+              }
+            }
+          }
+        });
+      }
+
+      // Si no se encontró o no se especificó turno, buscar sin restricción de turno
+      if (!reserva) {
+        console.log('Buscando reserva por usuario/quinchoId/fecha sin restricción de turno (fallback automático)');
+        reserva = await prisma.reserva.findFirst({
+          where: {
+            usuarioId: usuarioIdNum,
+            fecha: {
+              gte: inicioDia,
+              lte: finDia,
+            },
+            parrilla: {
+              quinchoId: quinchoIdNum
+            }
+          },
+          include: {
+            parrilla: {
+              include: {
+                quincho: true
+              }
+            }
+          }
+        });
+        if (reserva) {
+          console.log('Reserva encontrada en fallback automático por quincho:', {
+            id: reserva.id,
+            quinchoId: reserva.parrilla.quinchoId,
+            turno: reserva.turno,
+            fecha: reserva.fecha
+          });
+        }
+      }
+
+      // Si aún no se encontró, buscar cualquier reserva del usuario para hoy
+      if (!reserva) {
+        console.log('Buscando reserva del usuario para hoy sin restricción de quincho (fallback final)');
+        reserva = await prisma.reserva.findFirst({
+          where: {
+            usuarioId: usuarioIdNum,
+            fecha: {
+              gte: inicioDia,
+              lte: finDia,
+            }
+          },
+          include: {
+            parrilla: {
+              include: {
+                quincho: true
+              }
+            }
+          }
+        });
+        if (reserva) {
+          console.log('Reserva encontrada en fallback final:', {
+            id: reserva.id,
+            quinchoId: reserva.parrilla.quinchoId,
+            turno: reserva.turno,
+            fecha: reserva.fecha
+          });
+        }
+      }
+
+      console.log('Resultado de búsqueda:', reserva ? 'Encontrada' : 'No encontrada');
     }
 
     console.log('Reserva encontrada:', reserva);
@@ -406,12 +582,30 @@ app.post('/api/reservas/checkin', async (req, res) => {
       return res.status(404).json({ error: "Reserva no encontrada para confirmar asistencia." });
     }
 
+    // ✅ FIX: Usar getHoyArgentinaUTC() para comparar correctamente el día de la reserva
+    // con el día actual en hora Argentina, evitando el desfasaje después de las 21:00.
+    const hoyUTC = getHoyArgentinaUTC();
+    const reservaDayStart = new Date(reserva.fecha);
+    reservaDayStart.setUTCHours(0, 0, 0, 0);
+
+    if (reservaDayStart.getTime() !== hoyUTC.getTime()) {
+      return res.status(403).json({ 
+        error: `Esta reserva es para otro día. Solo puedes hacer checkin el día de la reserva.` 
+      });
+    }
+
     if (reserva.estado === "PRESENTADO") {
       return res.status(400).json({ error: "La asistencia ya fue confirmada." });
     }
 
     if (reserva.estado === "AUSENTE") {
       return res.status(400).json({ error: "Ya venció el tiempo de checkin. La asistencia quedó como inasistencia." });
+    }
+
+    // Validar que se está dentro de la ventana de escaneo permitida
+    const qrValidation = canScanQR(reserva.fecha, reserva.turno);
+    if (!qrValidation.canScan) {
+      return res.status(403).json({ error: qrValidation.reason });
     }
 
     await prisma.reserva.update({
