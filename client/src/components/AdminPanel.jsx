@@ -1,106 +1,170 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Search, Ban } from 'lucide-react';
+import { Shield, Search, CalendarDays, Clock, CheckCircle2, XCircle, AlertCircle, Users, ClipboardList } from 'lucide-react';
 
+/* ── Estilos (mismo sistema de variables que App.jsx) ─────────────────────── */
+const PanelStyles = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    .admin-panel * { box-sizing: border-box; font-family: 'Plus Jakarta Sans', sans-serif; }
+
+    @keyframes adminFadeUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    .admin-fade { animation: adminFadeUp .4s cubic-bezier(.22,1,.36,1) both; }
+    .a1 { animation-delay:.04s; } .a2 { animation-delay:.09s; }
+    .a3 { animation-delay:.14s; } .a4 { animation-delay:.19s; }
+
+    .admin-input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      background: var(--bg);
+      outline: none;
+      transition: border-color .18s;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .admin-input:focus { border-color: var(--teal); }
+
+    .admin-btn {
+      border: none; border-radius: var(--radius);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 700; cursor: pointer;
+      transition: filter .18s, transform .13s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .admin-btn:active { transform: scale(.97); }
+    .admin-btn:hover  { filter: brightness(.92); }
+
+    .admin-card {
+      background: var(--white);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm);
+      padding: 1.5rem;
+    }
+
+    .admin-table-row {
+      display: grid;
+      gap: 1rem;
+      align-items: center;
+      padding: 12px 14px;
+      transition: background .15s;
+    }
+    .admin-table-row:hover { background: var(--bg); }
+
+    .admin-scroll::-webkit-scrollbar { width: 4px; }
+    .admin-scroll::-webkit-scrollbar-track { background: var(--bg); }
+    .admin-scroll::-webkit-scrollbar-thumb { background: var(--border-md); border-radius: 2px; }
+
+    @media (max-width: 767px) {
+      .admin-header-actions { flex-direction: column; align-items: stretch !important; }
+      .admin-filters-row    { flex-direction: column !important; }
+    }
+  `}</style>
+);
+
+/* ── Badge de estado ──────────────────────────────────────────────────────── */
+const ReservaBadge = ({ estado }) => {
+  const map = {
+    PRESENTADO: { label: 'Confirmado',   bg: 'var(--teal-lt)',  color: 'var(--teal-dk)', Icon: CheckCircle2 },
+    AUSENTE:    { label: 'Inasistencia', bg: 'var(--red-lt)',   color: 'var(--red)',     Icon: XCircle },
+    PENDIENTE:  { label: 'Pendiente',    bg: 'var(--amber-lt)', color: 'var(--amber)',   Icon: AlertCircle },
+  };
+  const { label, bg, color, Icon } = map[estado] ?? map.PENDIENTE;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      background: bg, color, borderRadius: '6px',
+      fontSize: '11px', fontWeight: 700, padding: '3px 10px',
+      letterSpacing: '.02em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+    }}>
+      <Icon size={11} strokeWidth={2.5} />
+      {label}
+    </span>
+  );
+};
+
+/* ── Fila de reserva reutilizable ─────────────────────────────────────────── */
+const ReservaRow = ({ r }) => (
+  <div style={{
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '12px 14px', background: 'var(--bg)', borderRadius: 'var(--radius)',
+    border: '1px solid var(--border)', gap: '12px', flexWrap: 'wrap',
+  }}>
+    <div>
+      <p style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text)', margin: 0 }}>
+        {r.usuario.nombre} {r.usuario.apellido}
+      </p>
+      <p style={{ fontSize: '12px', fontWeight: 500, color: 'var(--teal-dk)', marginTop: '2px', marginBottom: 0 }}>
+        {r.parrilla.quincho.nombre} · {r.turno === 'DIA' ? 'Almuerzo' : 'Cena'}
+      </p>
+    </div>
+    <ReservaBadge estado={r.estado} />
+  </div>
+);
+
+/* ── AdminPanel ───────────────────────────────────────────────────────────── */
 const AdminPanel = ({ API_BASE_URL }) => {
-  const [reservasHoy, setReservasHoy] = useState([]);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [fechaFiltro, setFechaFiltro] = useState(new Date().toISOString().split('T')[0]);
-  const [turnoFiltro, setTurnoFiltro] = useState('NOCHE');
-  const [reservasFiltradas, setReservasFiltradas] = useState([]);
-  const [usuarios, setUsuarios] = useState([]);
-  const [usuariosFiltrados, setUsuariosFiltrados] = useState([]);
-  const [showUsuarios, setShowUsuarios] = useState(false);
+  const [reservasHoy, setReservasHoy]               = useState([]);
+  const [searchTerm, setSearchTerm]                 = useState('');
+  const [fechaFiltro, setFechaFiltro]               = useState(new Date().toISOString().split('T')[0]);
+  const [turnoFiltro, setTurnoFiltro]               = useState('NOCHE');
+  const [reservasFiltradas, setReservasFiltradas]   = useState([]);
+  const [usuarios, setUsuarios]                     = useState([]);
+  const [usuariosFiltrados, setUsuariosFiltrados]   = useState([]);
+  const [showUsuarios, setShowUsuarios]             = useState(false);
+  const [buscado, setBuscado]                       = useState(false);
 
   const fetchReservasHoy = async () => {
     const hoy = new Date().toISOString().split('T')[0];
     const token = localStorage.getItem('token');
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/reservas?fecha=${hoy}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (res.ok) {
-        const data = await res.json();
-        setReservasHoy(data);
-      } else {
-        console.error('Error fetching reservas:', res.status);
-        setReservasHoy([]);
-      }
-    } catch (error) {
-      console.error('Error fetching reservas:', error);
-      setReservasHoy([]);
-    }
+      if (res.ok) setReservasHoy(await res.json());
+      else { console.error('Error fetching reservas:', res.status); setReservasHoy([]); }
+    } catch (e) { console.error(e); setReservasHoy([]); }
   };
 
-  // Cargar reservas del día al entrar
-  useEffect(() => {
-    fetchReservasHoy();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  useEffect(() => { fetchReservasHoy(); }, []);
 
   const handleFilterUsers = () => {
-    if (!searchTerm) {
-      setUsuariosFiltrados(usuarios);
-    } else {
-      const filtered = usuarios.filter(u =>
-        u.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.apellido.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (u.dni && u.dni.includes(searchTerm))
-      );
-      setUsuariosFiltrados(filtered);
-    }
+    if (!searchTerm) { setUsuariosFiltrados(usuarios); return; }
+    setUsuariosFiltrados(usuarios.filter(u =>
+      u.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.apellido.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (u.dni && u.dni.includes(searchTerm))
+    ));
   };
 
-  React.useEffect(() => {
-    if (showUsuarios) {
-      handleFilterUsers();
-    }
-  }, [searchTerm, usuarios, showUsuarios]);
+  useEffect(() => { if (showUsuarios) handleFilterUsers(); }, [searchTerm, usuarios, showUsuarios]);
 
   const fetchReservasFiltradas = async () => {
     const token = localStorage.getItem('token');
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/reservas?fecha=${fechaFiltro}&turno=${turnoFiltro}`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (res.ok) {
-        const data = await res.json();
-        setReservasFiltradas(data);
-      } else {
-        console.error('Error fetching reservas filtradas:', res.status);
-        setReservasFiltradas([]);
-      }
-    } catch (error) {
-      console.error('Error fetching reservas filtradas:', error);
-      setReservasFiltradas([]);
-    }
+      if (res.ok) setReservasFiltradas(await res.json());
+      else { console.error('Error:', res.status); setReservasFiltradas([]); }
+    } catch (e) { console.error(e); setReservasFiltradas([]); }
+    setBuscado(true);
   };
 
   const fetchUsuarios = async () => {
     const token = localStorage.getItem('token');
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/usuarios`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-      if (res.ok) {
-        const data = await res.json();
-        setUsuarios(data);
-        setUsuariosFiltrados(data);
-      } else {
-        console.error('Error fetching usuarios:', res.status);
-        setUsuarios([]);
-      }
-    } catch (error) {
-      console.error('Error fetching usuarios:', error);
-      setUsuarios([]);
-    }
+      if (res.ok) { const d = await res.json(); setUsuarios(d); setUsuariosFiltrados(d); }
+      else { console.error('Error:', res.status); setUsuarios([]); }
+    } catch (e) { console.error(e); setUsuarios([]); }
   };
 
   const toggleSuspension = async (userId, currentlySuspended) => {
@@ -108,19 +172,11 @@ const AdminPanel = ({ API_BASE_URL }) => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/admin/usuarios/${userId}/suspension`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ suspended: !currentlySuspended })
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ suspended: !currentlySuspended }),
       });
       if (res.ok) {
-        // Refrescar la lista de usuarios si está visible
-        if (showUsuarios) {
-          fetchUsuarios();
-        }
-        
-        // Si el usuario suspendido es el mismo que está logueado, actualizar la sesión
+        if (showUsuarios) fetchUsuarios();
         const loggedUser = JSON.parse(localStorage.getItem('usuario') || '{}');
         if (loggedUser.id === userId) {
           loggedUser.suspendido = !currentlySuspended;
@@ -129,177 +185,234 @@ const AdminPanel = ({ API_BASE_URL }) => {
         alert(currentlySuspended ? 'Suspensión levantada.' : 'Usuario suspendido.');
       } else {
         const data = await res.json();
-        alert(data.error || 'Error al cambiar el estado de suspensión.');
+        alert(data.error || 'Error al cambiar el estado.');
       }
-    } catch (error) {
-      console.error('Error toggling suspension:', error);
-      alert('Error al conectar con el servidor.');
-    }
+    } catch (e) { console.error(e); alert('Error al conectar.'); }
   };
 
+  const SectionLabel = ({ icon: Icon, text }) => (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginBottom: '1rem' }}>
+      <Icon size={15} style={{ color: 'var(--teal)', flexShrink: 0 }} />
+      <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', margin: 0 }}>
+        {text}
+      </p>
+    </div>
+  );
+
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      <header className="flex items-center justify-between mb-10">
-        <div className="flex items-center gap-4">
-          <div className="bg-slate-900 p-3 rounded-2xl shadow-xl shadow-slate-200">
-            <Shield className="text-white" size={24} />
+    <>
+      <PanelStyles />
+      <div className="admin-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+        {/* ── HEADER ────────────────────────────────────────────────── */}
+        <div className="admin-fade a1" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{
+              width: '44px', height: '44px', borderRadius: '12px',
+              background: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(0,0,0,.15)',
+            }}>
+              <Shield size={20} color="#fff" />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text)', letterSpacing: '-.02em', margin: 0 }}>
+                Panel de Control
+              </h2>
+              <p style={{ fontSize: '12px', color: 'var(--text-sm)', fontWeight: 500, marginTop: '1px', marginBottom: 0 }}>
+                Administración · Alcaraz
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-2xl font-black text-slate-800 tracking-tighter uppercase">Panel de Control</h2>
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Administración Alcaraz</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-4">
-          <div className="flex gap-2">
-            <input 
-              type="text" 
-              placeholder="Filtrar usuarios..."
-              className="bg-white border border-stone-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-emerald-500 shadow-sm"
+
+          <div className="admin-header-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <input
+              type="text"
+              placeholder="Buscar usuario..."
               value={searchTerm}
               onChange={(e) => { setSearchTerm(e.target.value); handleFilterUsers(); }}
+              className="admin-input"
+              style={{ width: '200px' }}
             />
-            <button onClick={handleFilterUsers} className="bg-emerald-600 text-white p-3 rounded-xl hover:bg-emerald-500 transition-colors">
-              <Search size={20} />
+            <button
+              onClick={handleFilterUsers}
+              className="admin-btn"
+              style={{ background: 'var(--bg)', border: '1.5px solid var(--border-md)', color: 'var(--text-md)', padding: '9px 12px' }}
+            >
+              <Search size={15} />
             </button>
-            <button onClick={() => { setShowUsuarios(!showUsuarios); if (!showUsuarios) fetchUsuarios(); }} className="bg-slate-900 text-white px-4 py-2 rounded-xl hover:bg-slate-800 transition-all text-xs font-bold uppercase">
-              Listar Usuarios
+            <button
+              onClick={() => { setShowUsuarios(!showUsuarios); if (!showUsuarios) fetchUsuarios(); }}
+              className="admin-btn"
+              style={{
+                background: showUsuarios ? 'var(--text)' : 'var(--bg)',
+                color: showUsuarios ? '#fff' : 'var(--text-md)',
+                border: showUsuarios ? 'none' : '1.5px solid var(--border-md)',
+                padding: '9px 18px', fontSize: '13px',
+              }}
+            >
+              <Users size={15} />
+              {showUsuarios ? 'Ocultar' : 'Listar usuarios'}
             </button>
           </div>
         </div>
-      </header>
 
-      {/* Lista de Usuarios */}
-      {showUsuarios && (
-        <div className="bg-white p-6 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
-          <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Lista de Usuarios</h3>
-          <div className="space-y-3 max-h-96 overflow-y-auto">
-            <div className="grid grid-cols-6 gap-4 px-4 py-3 text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 border-b border-stone-200">
-              <div>Nombre</div>
-              <div>Email</div>
-              <div>DNI</div>
-              <div>Teléfono</div>
-              <div>Rol</div>
-              <div className="text-right">Acción</div>
-            </div>
-            {usuariosFiltrados.length > 0 ? usuariosFiltrados.map(u => (
-              <div key={u.id} className="grid grid-cols-6 gap-4 items-center p-4 bg-stone-50 rounded-xl border border-stone-100 text-sm">
-                <div className="truncate font-black uppercase text-slate-800">{u.nombre} {u.apellido}</div>
-                <div className="truncate text-slate-600">{u.email || '—'}</div>
-                <div className="truncate text-slate-600">{u.dni || '—'}</div>
-                <div className="truncate text-slate-600">{u.telefono || '—'}</div>
-                <div className="flex items-center gap-2 text-slate-600">
-                  {u.role === 'ADMIN' ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-amber-600">ADMIN</span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-slate-600">USER</span>
-                  )}
-                </div>
-                <div className="flex justify-end">
-                  <button 
-                    onClick={() => toggleSuspension(u.id, u.suspendido)}
-                    className={`px-3 py-1 rounded-full text-[10px] font-black uppercase transition-all ${u.suspendido ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'}`}
-                  >
-                    {u.suspendido ? 'Levantar' : 'Suspender'}
-                  </button>
-                </div>
-              </div>
-            )) : <p className="text-slate-400 font-bold text-center py-10">No se encontraron usuarios.</p>}
-          </div>
-        </div>
-      )}
+        {/* ── LISTA DE USUARIOS ─────────────────────────────────────── */}
+        {showUsuarios && (
+          <div className="admin-card admin-fade a2">
+            <SectionLabel icon={Users} text="Lista de Usuarios" />
 
-      {/* Filtros para buscar reservas */}
-      <div className="bg-white p-6 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
-        <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em] mb-4">Buscar Reservas por Fecha y Horario</h3>
-        <div className="flex gap-4 items-end">
-          <div className="flex-1">
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2 block">Fecha</label>
-            <input 
-              type="date" 
-              className="w-full p-3 bg-stone-50 border-2 border-stone-100 rounded-xl focus:border-emerald-500 outline-none font-bold text-slate-700"
-              value={fechaFiltro}
-              onChange={(e) => setFechaFiltro(e.target.value)}
-            />
-          </div>
-          <div className="flex-1">
-            <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-2 block">Turno</label>
-            <div className="flex gap-2 p-1 bg-stone-100 rounded-xl">
-              <button 
-                onClick={() => setTurnoFiltro('DIA')}
-                className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turnoFiltro === 'DIA' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                ALMUERZO
-              </button>
-              <button 
-                onClick={() => setTurnoFiltro('NOCHE')}
-                className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turnoFiltro === 'NOCHE' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-              >
-                CENA
-              </button>
-            </div>
-          </div>
-          <button onClick={fetchReservasFiltradas} className="bg-emerald-600 text-white px-6 py-3 rounded-xl hover:bg-emerald-500 transition-all font-bold">
-            Buscar
-          </button>
-        </div>
-        {reservasFiltradas.length > 0 ? (
-          <div className="mt-6">
-            <h4 className="text-sm font-black text-slate-600 uppercase tracking-[0.2em] mb-4">Reservas Encontradas</h4>
-            <div className="space-y-3">
-              {reservasFiltradas.map(r => (
-                <div key={r.id} className="flex items-center justify-between p-3 bg-stone-50 rounded-xl border border-stone-100">
-                  <div>
-                    <p className="font-black text-slate-800 uppercase">{r.usuario.nombre} {r.usuario.apellido}</p>
-                    <p className="text-[10px] font-bold text-emerald-600">{r.parrilla.quincho.nombre} - Turno {r.turno}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {r.estado === 'PRESENTADO' ? (
-                      <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span>
-                    ) : r.estado === 'AUSENTE' ? (
-                      <span className="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">inasistencia</span>
-                    ) : (
-                      <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">pendiente</span>
-                    )}
-                  </div>
+            {/* Cabecera tabla */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1.6fr 1.8fr .9fr .9fr .6fr .7fr',
+              gap: '1rem', padding: '6px 14px 10px',
+              borderBottom: '1px solid var(--border)', marginBottom: '4px',
+            }}>
+              {['Nombre', 'Email', 'DNI', 'Teléfono', 'Rol', ''].map((h, i) => (
+                <div key={i} style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', textAlign: i === 5 ? 'right' : 'left' }}>
+                  {h}
                 </div>
               ))}
             </div>
-          </div>
-        ) : (
-          <div className="mt-6">
-            <p className="text-slate-400 font-bold text-center py-10">No hay reservas registradas para esa fecha y horario.</p>
+
+            <div className="admin-scroll" style={{ maxHeight: '340px', overflowY: 'auto' }}>
+              {usuariosFiltrados.length > 0 ? usuariosFiltrados.map((u, idx) => (
+                <div
+                  key={u.id}
+                  className="admin-table-row"
+                  style={{
+                    gridTemplateColumns: '1.6fr 1.8fr .9fr .9fr .6fr .7fr',
+                    borderBottom: idx < usuariosFiltrados.length - 1 ? '1px solid var(--border)' : 'none',
+                    borderRadius: 0,
+                  }}
+                >
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.nombre} {u.apellido}
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-md)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {u.email || '—'}
+                  </div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-md)' }}>{u.dni || '—'}</div>
+                  <div style={{ fontSize: '13px', color: 'var(--text-md)' }}>{u.telefono || '—'}</div>
+                  <div>
+                    <span style={{
+                      fontSize: '10px', fontWeight: 700, padding: '3px 9px', borderRadius: '6px',
+                      background: u.role === 'ADMIN' ? 'var(--amber-lt)' : 'var(--bg)',
+                      color: u.role === 'ADMIN' ? 'var(--amber)' : 'var(--slate)',
+                      textTransform: 'uppercase', letterSpacing: '.03em',
+                    }}>
+                      {u.role === 'ADMIN' ? 'Admin' : 'User'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      onClick={() => toggleSuspension(u.id, u.suspendido)}
+                      className="admin-btn"
+                      style={{
+                        fontSize: '11px', padding: '4px 12px', borderRadius: '6px',
+                        background: u.suspendido ? 'var(--teal-lt)' : 'var(--red-lt)',
+                        color: u.suspendido ? 'var(--teal-dk)' : 'var(--red)',
+                      }}
+                    >
+                      {u.suspendido ? 'Levantar' : 'Suspender'}
+                    </button>
+                  </div>
+                </div>
+              )) : (
+                <p style={{ textAlign: 'center', padding: '2.5rem', fontSize: '13px', fontWeight: 600, color: 'var(--text-sm)', margin: 0 }}>
+                  No se encontraron usuarios.
+                </p>
+              )}
+            </div>
           </div>
         )}
-      </div>
 
-      <div className="grid grid-cols-1 gap-8">
-        
-        {/* Reservas del Día */}
-        <div className="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
-          <h3 className="text-sm font-black text-slate-400 uppercase tracking-[0.2em] mb-6">Reservas de Hoy</h3>
-          <div className="space-y-4">
-            {reservasHoy.length > 0 ? reservasHoy.map(r => (
-              <div key={r.id} className="flex items-center justify-between p-4 bg-stone-50 rounded-2xl border border-stone-100">
-                <div>
-                  <p className="font-black text-slate-800 uppercase">{r.usuario.nombre} {r.usuario.apellido}</p>
-                  <p className="text-[10px] font-bold text-emerald-600">{r.parrilla.quincho.nombre} - Turno {r.turno}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {r.estado === 'PRESENTADO' ? (
-                    <span className="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">asistencia confirmada</span>
-                  ) : r.estado === 'AUSENTE' ? (
-                    <span className="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">inasistencia</span>
-                  ) : (
-                    <span className="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-[10px] font-black uppercase">pendiente</span>
-                  )}
-                </div>
+        {/* ── BUSCAR RESERVAS ───────────────────────────────────────── */}
+        <div className="admin-card admin-fade a3">
+          <SectionLabel icon={Search} text="Buscar Reservas por Fecha y Turno" />
+
+          <div className="admin-filters-row" style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '7px' }}>
+                <CalendarDays size={12} /> Fecha
+              </label>
+              <input
+                type="date"
+                value={fechaFiltro}
+                onChange={(e) => setFechaFiltro(e.target.value)}
+                className="admin-input"
+              />
+            </div>
+
+            <div style={{ flex: 1 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '7px' }}>
+                <Clock size={12} /> Turno
+              </label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {['DIA', 'NOCHE'].map(t => (
+                  <button
+                    key={t}
+                    onClick={() => setTurnoFiltro(t)}
+                    style={{
+                      flex: 1, padding: '10px 6px', borderRadius: 'var(--radius)',
+                      border: turnoFiltro === t ? '1.5px solid var(--teal)' : '1.5px solid var(--border)',
+                      background: turnoFiltro === t ? 'var(--teal-lt)' : 'var(--bg)',
+                      color: turnoFiltro === t ? 'var(--teal-dk)' : 'var(--text-sm)',
+                      fontSize: '13px', fontWeight: 700, cursor: 'pointer', transition: 'all .18s',
+                    }}
+                  >
+                    {t === 'DIA' ? 'Almuerzo' : 'Cena'}
+                  </button>
+                ))}
               </div>
-            )) : <p className="text-slate-400 font-bold text-center py-10">No hay reservas para hoy aún.</p>}
+            </div>
+
+            <button
+              onClick={fetchReservasFiltradas}
+              className="admin-btn"
+              style={{ background: 'var(--teal)', color: '#fff', padding: '11px 24px', fontSize: '14px', flexShrink: 0 }}
+            >
+              Buscar
+            </button>
           </div>
+
+          {buscado && (
+            <div style={{ marginTop: '1.5rem', borderTop: '1px solid var(--border)', paddingTop: '1.25rem' }}>
+              {reservasFiltradas.length > 0 ? (
+                <>
+                  <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '12px', margin: '0 0 12px' }}>
+                    {reservasFiltradas.length} reserva{reservasFiltradas.length !== 1 ? 's' : ''} encontrada{reservasFiltradas.length !== 1 ? 's' : ''}
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {reservasFiltradas.map(r => <ReservaRow key={r.id} r={r} />)}
+                  </div>
+                </>
+              ) : (
+                <p style={{ textAlign: 'center', padding: '2rem', fontSize: '13px', fontWeight: 600, color: 'var(--text-sm)', margin: 0 }}>
+                  No hay reservas para esa fecha y turno.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── RESERVAS DE HOY ───────────────────────────────────────── */}
+        <div className="admin-card admin-fade a4">
+          <SectionLabel icon={ClipboardList} text="Reservas de Hoy" />
+
+          {reservasHoy.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {reservasHoy.map(r => <ReservaRow key={r.id} r={r} />)}
+            </div>
+          ) : (
+            <p style={{ textAlign: 'center', padding: '2.5rem', fontSize: '13px', fontWeight: 600, color: 'var(--text-sm)', margin: 0 }}>
+              No hay reservas registradas para hoy.
+            </p>
+          )}
         </div>
 
       </div>
-    </div>
+    </>
   );
 };
 

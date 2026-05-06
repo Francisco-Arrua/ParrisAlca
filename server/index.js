@@ -7,149 +7,282 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const prisma = new PrismaClient();
 
-const JWT_SECRET = "CLAVE_INEXISTENTE_AUN"; // Esto debería ir en el .env
-
-const getArgentinaHour = () => (new Date().getUTCHours() - 3 + 24) % 24;
-
-// ✅ FIX: Función centralizada para obtener "hoy" en hora Argentina como fecha UTC 00:00:00
-// El bug original usaba new Date() con setUTCHours(0,0,0,0) que devuelve el día UTC,
-// que después de las 21:00 hora Argentina ya es "mañana" en UTC.
-function getHoyArgentinaUTC() {
-  const ahora = new Date();
-  const ahoraArgentina = new Date(ahora.getTime() - 3 * 60 * 60 * 1000);
-  return new Date(Date.UTC(
-    ahoraArgentina.getUTCFullYear(),
-    ahoraArgentina.getUTCMonth(),
-    ahoraArgentina.getUTCDate()
-  ));
-}
-
-// Middleware para verificar si es Admin
-const isAdmin = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: "No autorizado" });
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    if (decoded.role !== 'ADMIN') {
-      return res.status(403).json({ error: "Acceso denegado. Se requiere ser administrador." });
-    }
-    next();
-  } catch (err) {
-    res.status(401).json({ error: "Token inválido" });
-  }
-};
+const JWT_SECRET = "CLAVE_INEXISTENTE_AUN"; // Mover al .env
 
 app.use(cors());
 app.use(express.json());
 
-// --- RUTA DE REGISTRO ---
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+const getArgentinaHour = () => (new Date().getUTCHours() - 3 + 24) % 24;
+
+// "Hoy" en hora Argentina expresado como fecha UTC 00:00:00
+function getHoyArgentinaUTC() {
+  const ahora = new Date();
+  const arg   = new Date(ahora.getTime() - 3 * 60 * 60 * 1000);
+  return new Date(Date.UTC(arg.getUTCFullYear(), arg.getUTCMonth(), arg.getUTCDate()));
+}
+
+// Deadline de asistencia según turno
+function getAttendanceDeadline(reservaFecha, turno) {
+  const d = new Date(reservaFecha.getTime());
+  if (turno === 'DIA') {
+    d.setTime(d.getTime() + 17 * 60 * 60 * 1000);           // 14:00 ARG = 17:00 UTC
+  } else {
+    d.setTime(d.getTime() + 26 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000); // 23:59:59 ARG
+  }
+  return d;
+}
+
+// Valida si se puede escanear QR ahora
+function canScanQR(reservaFecha, turno) {
+  const hoyUTC       = getHoyArgentinaUTC();
+  const reservaDay   = new Date(reservaFecha);
+  reservaDay.setUTCHours(0, 0, 0, 0);
+
+  if (reservaDay.getTime() !== hoyUTC.getTime()) {
+    return { canScan: false, reason: "Solo podés escanear el QR el día de la reserva." };
+  }
+
+  const hora = getArgentinaHour();
+  if (turno === 'DIA') {
+    if (hora >= 11 && hora < 14) return { canScan: true };
+    return { canScan: false, reason: "El QR del turno almuerzo se puede escanear entre las 11:00 y las 14:00." };
+  }
+  if (turno === 'NOCHE') {
+    if (hora >= 20 && hora < 24) return { canScan: true };
+    return { canScan: false, reason: "El QR del turno cena se puede escanear entre las 20:00 y las 23:59." };
+  }
+  return { canScan: false, reason: "Turno no válido." };
+}
+
+// Distancia entre dos coordenadas en metros (Haversine)
+function getDistanceInMeters(lat1, lon1, lat2, lon2) {
+  const R    = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a    = Math.sin(dLat / 2) ** 2 +
+               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Marca como AUSENTE las reservas cuyo deadline ya pasó y suspende usuarios con 2+ faltas
+async function markOverdueReservations() {
+  const ahora      = new Date();
+  const pendientes = await prisma.reserva.findMany({ where: { estado: 'PENDIENTE' } });
+
+  const vencidas = pendientes.filter(r => {
+    const limite = getAttendanceDeadline(r.fecha, r.turno);
+    return limite && ahora > limite;
+  });
+
+  if (vencidas.length === 0) return;
+
+  await prisma.reserva.updateMany({
+    where: { id: { in: vencidas.map(r => r.id) } },
+    data:  { estado: 'AUSENTE' },
+  });
+
+  // Acumular faltas por usuario
+  const faltasPorUsuario = vencidas.reduce((acc, r) => {
+    acc[r.usuarioId] = (acc[r.usuarioId] || 0) + 1;
+    return acc;
+  }, {});
+
+  for (const [usuarioId, incremento] of Object.entries(faltasPorUsuario)) {
+    const usuario = await prisma.usuario.findUnique({ where: { id: parseInt(usuarioId, 10) } });
+    if (!usuario) continue;
+    const nuevasFaltas = usuario.faltas + incremento;
+    await prisma.usuario.update({
+      where: { id: usuario.id },
+      data:  { faltas: { increment: incremento }, suspendido: nuevasFaltas >= 2 ? true : usuario.suspendido },
+    });
+  }
+}
+
+// ─── MIDDLEWARE ADMIN ──────────────────────────────────────────────────────────
+
+const isAdmin = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: "No autorizado" });
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'ADMIN') return res.status(403).json({ error: "Acceso denegado." });
+    next();
+  } catch {
+    res.status(401).json({ error: "Token inválido" });
+  }
+};
+
+// ─── AUTH ──────────────────────────────────────────────────────────────────────
+
 app.post('/api/auth/register', async (req, res) => {
   const { nombre, apellido, dni, telefono, email, password } = req.body;
-
   try {
-    // Encriptar la contraseña
     const hashedPassword = await bcrypt.hash(password, 10);
-
-    const nuevoUsuario = await prisma.usuario.create({
-      data: {
-        nombre,
-        apellido,
-        dni,
-        telefono,
-        email,
-        password: hashedPassword,
-      },
+    const nuevo = await prisma.usuario.create({
+      data: { nombre, apellido, dni, telefono, email, password: hashedPassword },
     });
-
-    res.json({ message: "Usuario creado con éxito", userId: nuevoUsuario.id });
-  } catch (error) {
-    res.status(400).json({ error: "El email o DNI ya están registrados" });
+    res.json({ message: "Usuario creado con éxito", userId: nuevo.id });
+  } catch {
+    res.status(400).json({ error: "El email o DNI ya están registrados." });
   }
 });
 
-// --- RUTA DE LOGIN ACTUALIZADA ---
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-
   try {
     const usuario = await prisma.usuario.findUnique({ where: { email } });
-    if (!usuario) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (!usuario) return res.status(404).json({ error: "Usuario no encontrado." });
 
-    const passwordValida = await bcrypt.compare(password, usuario.password);
-    if (!passwordValida) return res.status(401).json({ error: "Contraseña incorrecta" });
+    const ok = await bcrypt.compare(password, usuario.password);
+    if (!ok) return res.status(401).json({ error: "Contraseña incorrecta." });
 
-    // Incluimos el ROLE en el token para que el backend pueda validarlo después
     const token = jwt.sign(
-      { id: usuario.id, nombre: usuario.nombre, role: usuario.role }, 
-      JWT_SECRET, 
+      { id: usuario.id, nombre: usuario.nombre, role: usuario.role },
+      JWT_SECRET,
       { expiresIn: '24h' }
     );
-
-    // Enviamos el role al frontend para que React sepa qué mostrar
-    res.json({ 
-      token, 
-      usuario: { 
-        id: usuario.id, 
-        nombre: usuario.nombre, 
-        apellido: usuario.apellido,
-        role: usuario.role // <--- IMPORTANTE
-      } 
+    res.json({
+      token,
+      usuario: { id: usuario.id, nombre: usuario.nombre, apellido: usuario.apellido, role: usuario.role },
     });
-  } catch (error) {
-    res.status(500).json({ error: "Error en el servidor" });
+  } catch {
+    res.status(500).json({ error: "Error en el servidor." });
   }
 });
 
-// Ruta para ver el estado de todas las parrillas en una fecha específica
+// ─── QUINCHOS ─────────────────────────────────────────────────────────────────
+
 app.get('/api/estado-quinchos', async (req, res) => {
   const { fecha, turno } = req.query;
-
   try {
     await markOverdueReservations();
 
-    // 1. Creamos el rango del día completo (de 00:00 a 23:59:59)
-    // Esto asegura que encuentre la reserva sin importar el desfasaje de horas
-    const inicioDia = new Date(fecha);
-    inicioDia.setUTCHours(0, 0, 0, 0);
-
-    const finDia = new Date(fecha);
-    finDia.setUTCHours(23, 59, 59, 999);
+    const inicioDia = new Date(fecha); inicioDia.setUTCHours(0, 0, 0, 0);
+    const finDia    = new Date(fecha); finDia.setUTCHours(23, 59, 59, 999);
 
     const quinchos = await prisma.quincho.findMany({
       include: {
         parrillas: {
           include: {
-            reservas: {
-              where: {
-                fecha: {
-                  gte: inicioDia,
-                  lte: finDia
-                },
-                turno: turno 
-              }
-            }
-          }
-        }
+            reservas: { where: { fecha: { gte: inicioDia, lte: finDia }, turno } },
+          },
+        },
       },
-      orderBy: { numero: 'asc' }
+      orderBy: { numero: 'asc' },
     });
 
-    // Filtrar reservas expiradas
+    // Filtrar reservas cuyo deadline ya pasó (se mostrarán como libres)
     const ahora = new Date();
-    quinchos.forEach(quincho => {
-      quincho.parrillas.forEach(parrilla => {
-        parrilla.reservas = parrilla.reservas.filter(reserva => {
-          const deadline = getAttendanceDeadline(reserva.fecha, reserva.turno);
-          return deadline > ahora;
-        });
-      });
-    });
-    
+    quinchos.forEach(q =>
+      q.parrillas.forEach(p => {
+        p.reservas = p.reservas.filter(r => getAttendanceDeadline(r.fecha, r.turno) > ahora);
+      })
+    );
+
     res.json(quinchos);
-  } catch (error) {
-    console.error("ERROR:", error);
-    res.status(500).json({ error: "Error al obtener estado" });
+  } catch (err) {
+    console.error("Error /api/estado-quinchos:", err);
+    res.status(500).json({ error: "Error al obtener estado." });
+  }
+});
+
+// ─── RESERVAS ─────────────────────────────────────────────────────────────────
+
+// ⚠️  IMPORTANTE: /checkin debe ir ANTES que POST /api/reservas
+//     Express evalúa rutas en orden; si POST /api/reservas va primero,
+//     "checkin" es interpretado como :id y nunca llega a esta ruta.
+
+app.post('/api/reservas/checkin', async (req, res) => {
+  const { usuarioId, quinchoId, fecha, lat, lon } = req.body;
+
+  console.log('Checkin request:', { usuarioId, quinchoId, fecha, lat, lon });
+
+  // Validar coordenadas del predio
+  const PREDIO_LAT = parseFloat(process.env.PREDIO_LAT);
+  const PREDIO_LON = parseFloat(process.env.PREDIO_LON);
+
+  if (isNaN(PREDIO_LAT) || isNaN(PREDIO_LON)) {
+    console.error("ERROR: Faltan PREDIO_LAT / PREDIO_LON en el .env");
+    return res.status(500).json({ error: "Error de configuración del servidor." });
+  }
+
+  if (!lat || !lon) return res.status(400).json({ error: "Faltan coordenadas." });
+
+  const distancia = getDistanceInMeters(lat, lon, PREDIO_LAT, PREDIO_LON);
+  console.log('Distancia al predio:', distancia, 'm');
+
+  if (distancia > 200) {
+    return res.status(403).json({ error: "Estás demasiado lejos del predio para marcar asistencia." });
+  }
+
+  try {
+    await markOverdueReservations();
+
+    // Calcular rango del día en Argentina
+    let fechaBase;
+    if (fecha && typeof fecha === 'string' && fecha.includes('/')) {
+      const [dia, mes, anio] = fecha.split('/');
+      fechaBase = new Date(`${anio}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}T00:00:00Z`);
+    } else if (fecha && typeof fecha === 'string') {
+      fechaBase = new Date(fecha + "T00:00:00Z");
+    } else {
+      fechaBase = getHoyArgentinaUTC();
+    }
+
+    const inicioDia = new Date(fechaBase); inicioDia.setUTCHours(0, 0, 0, 0);
+    const finDia    = new Date(fechaBase); finDia.setUTCHours(23, 59, 59, 999);
+
+    const usuarioIdNum = parseInt(usuarioId, 10);
+    const quinchoIdNum = parseInt(quinchoId, 10);
+
+    // Buscar la reserva: usuario + quincho + fecha (sin filtrar turno —
+    // canScanQR valida si la hora actual corresponde al turno de la reserva)
+    const reserva = await prisma.reserva.findFirst({
+      where: {
+        usuarioId: usuarioIdNum,
+        fecha:     { gte: inicioDia, lte: finDia },
+        parrilla:  { quinchoId: quinchoIdNum },
+      },
+      include: { parrilla: { include: { quincho: true } } },
+    });
+
+    console.log('Reserva encontrada:', reserva
+      ? { id: reserva.id, turno: reserva.turno, estado: reserva.estado, fecha: reserva.fecha }
+      : 'No encontrada'
+    );
+
+    if (!reserva) {
+      return res.status(404).json({ error: "No encontramos una reserva tuya para este quincho hoy." });
+    }
+
+    // Validar que la reserva sea de hoy (en hora Argentina)
+    const hoyUTC     = getHoyArgentinaUTC();
+    const reservaDay = new Date(reserva.fecha); reservaDay.setUTCHours(0, 0, 0, 0);
+    if (reservaDay.getTime() !== hoyUTC.getTime()) {
+      return res.status(403).json({ error: "Esta reserva es para otro día." });
+    }
+
+    if (reserva.estado === 'PRESENTADO') {
+      return res.status(400).json({ error: "La asistencia ya fue confirmada." });
+    }
+    if (reserva.estado === 'AUSENTE') {
+      return res.status(400).json({ error: "Ya venció el tiempo de checkin. La reserva quedó como inasistencia." });
+    }
+
+    // Validar ventana horaria según el turno de la reserva
+    const qrCheck = canScanQR(reserva.fecha, reserva.turno);
+    if (!qrCheck.canScan) {
+      return res.status(403).json({ error: qrCheck.reason });
+    }
+
+    await prisma.reserva.update({ where: { id: reserva.id }, data: { estado: 'PRESENTADO' } });
+    res.json({ message: "¡Asistencia confirmada! Que disfrutes el quincho." });
+
+  } catch (err) {
+    console.error("Error en checkin:", err);
+    res.status(500).json({ error: "Error al confirmar asistencia." });
   }
 });
 
@@ -160,645 +293,206 @@ app.post('/api/reservas', async (req, res) => {
   try {
     await markOverdueReservations();
 
-    // ✅ FIX: Usar función centralizada para calcular "hoy" en Argentina
     const hoy = getHoyArgentinaUTC();
-
     if (fechaReserva < hoy) {
-      return res.status(400).json({ error: "No puedes reservar fechas pasadas." });
+      return res.status(400).json({ error: "No podés reservar fechas pasadas." });
     }
 
-    // Validar que si es hoy, no haya pasado la hora de inicio del turno
+    // Si es hoy, verificar que no haya pasado la hora de inicio del turno
     if (fechaReserva.getTime() === hoy.getTime()) {
       const horaInicio = turno === 'DIA' ? 16 : 20;
-      const horaActual = getArgentinaHour();
-
-      if (horaActual >= horaInicio) {
-        return res.status(400).json({ 
-          error: `Ya pasó la hora de inicio del turno. Las reservas para hoy deben hacerse antes de las ${horaInicio}:00.` 
+      if (getArgentinaHour() >= horaInicio) {
+        return res.status(400).json({
+          error: `Ya pasó la hora de inicio del turno. Reservá antes de las ${horaInicio}:00.`,
         });
       }
     }
 
-    // Verificar si el usuario está suspendido
     const userIdNum = typeof usuarioId === 'string' ? parseInt(usuarioId, 10) : usuarioId;
-    
-    const usuario = await prisma.usuario.findUnique({
-      where: { id: userIdNum }
-    });
-    
-    if (!usuario) {
-      return res.status(400).json({ error: "Usuario no encontrado." });
-    }
-    
-    if (usuario.suspendido) {
-      console.log(`Usuario ${usuario.nombre} ${usuario.apellido} está suspendido, bloqueando reserva`);
-      return res.status(400).json({ error: "Tienes una suspensión por no asistir en más de dos oportunidades. Contacta con administración." });
-    }
+    const usuario   = await prisma.usuario.findUnique({ where: { id: userIdNum } });
+    if (!usuario)          return res.status(400).json({ error: "Usuario no encontrado." });
+    if (usuario.suspendido) return res.status(400).json({ error: "Tenés una suspensión activa. Contactá con administración." });
 
-    // el usuario no puede reservar dos quinchos a la vez
-    const reservaExistenteTurno = await prisma.reserva.findFirst({
-      where: { usuarioId, fecha: fechaReserva, turno }
-    });
-    if (reservaExistenteTurno) return res.status(400).json({ error: "Ya tienes una reserva para este turno." });
+    // Un usuario no puede tener dos reservas en el mismo turno/día
+    const yaReservado = await prisma.reserva.findFirst({ where: { usuarioId: userIdNum, fecha: fechaReserva, turno } });
+    if (yaReservado) return res.status(400).json({ error: "Ya tenés una reserva para este turno." });
 
-    // Verificar si el quincho ya está ocupado en ese turno específico
-    const ahora = new Date();
+    // Verificar disponibilidad del quincho
+    const ahora  = new Date();
     const quincho = await prisma.quincho.findUnique({
       where: { id: parseInt(quinchoId) },
-      include: {
-        parrillas: {
-          include: {
-            reservas: {
-              where: { fecha: fechaReserva, turno }
-            }
-          }
-        }
-      }
+      include: { parrillas: { include: { reservas: { where: { fecha: fechaReserva, turno } } } } },
     });
+    if (!quincho) return res.status(400).json({ error: "El quincho no existe." });
 
-    if (!quincho) {
-      return res.status(400).json({ error: "El quincho no existe." });
-    }
-
-    // Filtrar reservas expiradas
-    quincho.parrillas.forEach(parrilla => {
-      parrilla.reservas = parrilla.reservas.filter(reserva => {
-        const deadline = getAttendanceDeadline(reserva.fecha, reserva.turno);
-        return deadline > ahora;
-      });
+    quincho.parrillas.forEach(p => {
+      p.reservas = p.reservas.filter(r => getAttendanceDeadline(r.fecha, r.turno) > ahora);
     });
-
-    const quinchoOcupado = quincho.parrillas.some(p => p.reservas.length > 0);
-    if (quinchoOcupado) {
+    if (quincho.parrillas.some(p => p.reservas.length > 0)) {
       return res.status(400).json({ error: "Este quincho ya está ocupado en ese turno." });
     }
 
-    // Verificar que existe la parrilla
     const parrilla = await prisma.parrilla.findFirst({ where: { quinchoId: parseInt(quinchoId) } });
-    if (!parrilla) {
-      return res.status(400).json({ error: "No hay parrillas disponibles en este quincho." });
-    }
+    if (!parrilla) return res.status(400).json({ error: "No hay parrillas disponibles en este quincho." });
 
-    // REGLA 3: No más de dos noches (o días) seguidas
-    // Buscamos reservas del usuario en los días cercanos
-    const ayer = new Date(fechaReserva); ayer.setDate(ayer.getDate() - 1);
-    const antesDeAyer = new Date(fechaReserva); antesDeAyer.setDate(antesDeAyer.getDate() - 2);
-    const mañana = new Date(fechaReserva); mañana.setDate(mañana.getDate() + 1);
-    const pasadoMañana = new Date(fechaReserva); pasadoMañana.setDate(pasadoMañana.getDate() + 2);
+    // Regla: no más de 2 días consecutivos en el mismo turno
+    const ayer         = new Date(fechaReserva); ayer.setDate(ayer.getDate() - 1);
+    const antesDeAyer  = new Date(fechaReserva); antesDeAyer.setDate(antesDeAyer.getDate() - 2);
+    const manana       = new Date(fechaReserva); manana.setDate(manana.getDate() + 1);
+    const pasadoManana = new Date(fechaReserva); pasadoManana.setDate(pasadoManana.getDate() + 2);
 
-    const previas = await prisma.reserva.count({
-      where: { usuarioId, fecha: { in: [ayer, antesDeAyer] }, turno }
-    });
-    const futuras = await prisma.reserva.count({
-      where: { usuarioId, fecha: { in: [mañana, pasadoMañana] }, turno }
-    });
-
+    const [previas, futuras] = await Promise.all([
+      prisma.reserva.count({ where: { usuarioId: userIdNum, fecha: { in: [ayer, antesDeAyer] }, turno } }),
+      prisma.reserva.count({ where: { usuarioId: userIdNum, fecha: { in: [manana, pasadoManana] }, turno } }),
+    ]);
     if (previas >= 2 || futuras >= 2) {
-      return res.status(400).json({ error: "No puedes reservar más de 2 días seguidos. Debe haber una noche de por medio." });
+      return res.status(400).json({ error: "No podés reservar más de 2 días seguidos. Debe haber un día de por medio." });
     }
-    
-    await prisma.reserva.create({
-      data: {
-        fecha: fechaReserva,
-        turno,
-        usuarioId: parseInt(usuarioId),
-        parrillaId: parrilla.id
-      }
-    });
 
+    await prisma.reserva.create({
+      data: { fecha: fechaReserva, turno, usuarioId: userIdNum, parrillaId: parrilla.id },
+    });
     res.json({ message: "Reserva confirmada" });
-  } catch (error) {
-    console.error("Error al crear reserva:", error);
+
+  } catch (err) {
+    console.error("Error al crear reserva:", err);
     res.status(400).json({ error: "Error al procesar la reserva." });
   }
 });
 
-// --- RUTA PARA CANCELAR RESERVAS ---
 app.delete('/api/reservas/:id', async (req, res) => {
   try {
     await markOverdueReservations();
 
-    const reserva = await prisma.reserva.findUnique({
-      where: { id: parseInt(req.params.id) },
-    });
+    const reserva = await prisma.reserva.findUnique({ where: { id: parseInt(req.params.id) } });
+    if (!reserva) return res.status(404).json({ error: "Reserva no encontrada." });
 
-    if (!reserva) return res.status(404).json({ error: "Reserva no encontrada" });
-
-    // Lógica de tiempo: Mínimo 2 horas antes del evento
-    const ahora = new Date();
-    const horaInicio = reserva.turno === 'DIA' ? 10 : 20;
-    
-    // Crear la fecha límite: día de la reserva a las (horaInicio - 2) horas
-    const fechaReserva = new Date(reserva.fecha);
-    const limiteCancelacion = new Date(fechaReserva.getUTCFullYear(), fechaReserva.getUTCMonth(), fechaReserva.getUTCDate(), horaInicio - 2, 0, 0, 0);
-
-    if (ahora > limiteCancelacion) {
-      return res.status(400).json({ 
-        error: "Ya es tarde para cancelar. Debe hacerse con 2 horas de anticipación." 
-      });
+    const horaInicio       = reserva.turno === 'DIA' ? 10 : 20;
+    const fechaR           = new Date(reserva.fecha);
+    const limiteCancelacion = new Date(
+      fechaR.getUTCFullYear(), fechaR.getUTCMonth(), fechaR.getUTCDate(),
+      horaInicio - 2, 0, 0, 0
+    );
+    if (new Date() > limiteCancelacion) {
+      return res.status(400).json({ error: "Ya es tarde para cancelar. Debe hacerse con 2 horas de anticipación." });
     }
 
     await prisma.reserva.delete({ where: { id: reserva.id } });
-    res.json({ message: "Reserva cancelada con éxito" });
-  } catch (error) {
-    console.error("Error al cancelar:", error);
-    res.status(500).json({ error: "Error al cancelar" });
+    res.json({ message: "Reserva cancelada con éxito." });
+
+  } catch (err) {
+    console.error("Error al cancelar:", err);
+    res.status(500).json({ error: "Error al cancelar." });
   }
 });
 
+// ─── ADMIN ────────────────────────────────────────────────────────────────────
 
-// FUNCION PARA CALCULAR DISTANCIA ENTRE DOS PUNTOS GEOGRÁFICOS PARA CONFIRMAR LA ASISTENCIA EN EL LUGAR
-function getDistanceInMeters(lat1, lon1, lat2, lon2) {
-  const R = 6371000; // Radio de la tierra en metros
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  return R * c;
-}
-
-function getAttendanceDeadline(reservaFecha, turno) {
-  const deadline = new Date(reservaFecha.getTime());
-  if (turno === 'DIA') {
-    // 14:00 Argentina corresponde a 17:00 UTC cuando la fecha se almacena como 00:00 UTC del mismo día
-    deadline.setTime(deadline.getTime() + 17 * 60 * 60 * 1000);
-  } else {
-    // 23:59:59 Argentina corresponde a 02:59:59 UTC del día siguiente
-    deadline.setTime(deadline.getTime() + 26 * 60 * 60 * 1000 + 59 * 60 * 1000 + 59 * 1000);
-  }
-  return deadline;
-}
-
-// ✅ FIX: Usar getHoyArgentinaUTC() en lugar de calcular hoyUTC con new Date() + setUTCHours
-// El bug original hacía que después de las 21:00 hora Argentina, hoyUTC pasara al día siguiente
-// en UTC, haciendo que la comparación de fechas fallara aunque la reserva fuera "de hoy".
-function canScanQR(reservaFecha, turno) {
-  // ✅ FIX: Calcular "hoy" en hora Argentina correctamente
-  const hoyUTC = getHoyArgentinaUTC();
-  
-  const reservaDayStart = new Date(reservaFecha);
-  reservaDayStart.setUTCHours(0, 0, 0, 0);
-  
-  if (reservaDayStart.getTime() !== hoyUTC.getTime()) {
-    return { canScan: false, reason: "Sólo puedes escanear el QR el día de la reserva" };
-  }
-  
-  // Obtener la hora actual en Argentina
-  const horaActual = getArgentinaHour();
-  
-  if (turno === 'DIA') {
-    // Turno día: 11:00 a 14:00
-    if (horaActual >= 11 && horaActual < 14) {
-      return { canScan: true };
-    } else {
-      return { canScan: false, reason: "El QR del turno día solo se puede escanear entre las 11:00 y las 14:00" };
-    }
-  } else if (turno === 'NOCHE') {
-    // Turno noche: 20:00 a 23:59
-    if (horaActual >= 20 && horaActual < 24) {
-      return { canScan: true };
-    } else {
-      return { canScan: false, reason: "El QR del turno noche solo se puede escanear entre las 20:00 y las 23:59" };
-    }
-  }
-  
-  return { canScan: false, reason: "Turno no válido" };
-}
-
-async function markOverdueReservations() {
-  const ahora = new Date();
-  const pendientes = await prisma.reserva.findMany({
-    where: { estado: 'PENDIENTE' }
-  });
-
-  const pendientesParaMarcar = pendientes.filter(reserva => {
-    const limite = getAttendanceDeadline(reserva.fecha, reserva.turno);
-    return limite && ahora > limite;
-  });
-
-  if (pendientesParaMarcar.length === 0) {
-    return { marcadas: 0, detalles: [] };
-  }
-
-  const idsParaMarcar = pendientesParaMarcar.map(r => r.id);
-  await prisma.reserva.updateMany({
-    where: { id: { in: idsParaMarcar } },
-    data: { estado: 'AUSENTE' }
-  });
-
-  const usuariosParaActualizar = pendientesParaMarcar.reduce((acc, reserva) => {
-    acc[reserva.usuarioId] = (acc[reserva.usuarioId] || 0) + 1;
-    return acc;
-  }, {});
-
-  const detalles = [];
-  for (const usuarioId of Object.keys(usuariosParaActualizar)) {
-    const incremento = usuariosParaActualizar[usuarioId];
-    const usuario = await prisma.usuario.findUnique({ where: { id: parseInt(usuarioId, 10) } });
-    if (!usuario) continue;
-
-    const nuevosFaltas = usuario.faltas + incremento;
-    await prisma.usuario.update({
-      where: { id: usuario.id },
-      data: {
-        faltas: { increment: incremento },
-        suspendido: nuevosFaltas >= 2 ? true : usuario.suspendido
-      }
-    });
-
-    detalles.push({
-      usuario: `${usuario.nombre} ${usuario.apellido}`,
-      faltas: incremento,
-      totalFaltas: nuevosFaltas,
-      estado: nuevosFaltas >= 2 ? 'SUSPENDIDO' : 'ACTIVO'
-    });
-  }
-
-  return { marcadas: pendientesParaMarcar.length, detalles };
-}
-
-
-// --- RUTA PARA CHECKIN, ESCANER QR  (CONFIRMAR ASISTENCIA) ---
-app.post('/api/reservas/checkin', async (req, res) => {
-  const { reservaId, usuarioId, quinchoId, fecha, turno, lat, lon } = req.body;
-
-  console.log('Checkin request:', { reservaId, usuarioId, quinchoId, fecha, turno, lat, lon });
-
-  // Leer coordenadas desde las variables de entorno
-  const PREDIO_LAT = parseFloat(process.env.PREDIO_LAT);
-  const PREDIO_LON = parseFloat(process.env.PREDIO_LON);
-
-  // Validación de seguridad por si te olvidas de ponerlas en el .env
-  if (isNaN(PREDIO_LAT) || isNaN(PREDIO_LON)) {
-    console.error("ERROR: No se encontraron las coordenadas en el archivo .env");
-  }
-
-  if (!lat || !lon) {
-    return res.status(400).json({ error: "Faltan coordenadas para confirmar asistencia." });
-  }
-
-  const distancia = getDistanceInMeters(lat, lon, PREDIO_LAT, PREDIO_LON);
-  console.log('Distancia calculada:', distancia);
-
-  if (distancia > 200) {
-    return res.status(403).json({ error: "Estás demasiado lejos del predio para marcar asistencia." });
-  }
-
-  try {
-    await markOverdueReservations();
-
-    let reserva;
-
-    if (reservaId) {
-      console.log('Buscando reserva por ID:', reservaId);
-      reserva = await prisma.reserva.findUnique({
-        where: { id: parseInt(reservaId) },
-        // ✅ FIX: Incluir parrilla para tener todos los datos necesarios en validaciones posteriores
-        include: {
-          parrilla: {
-            include: {
-              quincho: true
-            }
-          }
-        }
-      });
-    } else if (usuarioId && quinchoId) {
-      const usuarioIdNum = parseInt(usuarioId, 10);
-      const quinchoIdNum = parseInt(quinchoId, 10);
-
-      let fechaReserva;
-      if (fecha && typeof fecha === 'string' && fecha.includes('/')) {
-        const [dia, mes, anio] = fecha.split('/');
-        fechaReserva = new Date(`${anio}-${mes.padStart(2,'0')}-${dia.padStart(2,'0')}T00:00:00Z`);
-        console.log('Fecha parseada desde DD/MM/YYYY:', fecha, '->', fechaReserva);
-      } else if (fecha && typeof fecha === 'string') {
-        fechaReserva = new Date(fecha + "T00:00:00Z");
-        console.log('Fecha parseada desde YYYY-MM-DD:', fecha, '->', fechaReserva);
-      } else {
-        // ✅ FIX: Usar getHoyArgentinaUTC() para que la fecha actual sea correcta en Argentina
-        fechaReserva = getHoyArgentinaUTC();
-        console.log('Fecha no enviada o inválida, usando fecha actual Argentina UTC:', fechaReserva);
-      }
-
-      const inicioDia = new Date(fechaReserva);
-      inicioDia.setUTCHours(0, 0, 0, 0);
-      const finDia = new Date(fechaReserva);
-      finDia.setUTCHours(23, 59, 59, 999);
-
-      // Si se especifica turno, buscar con turno exacto primero
-      if (turno) {
-        const turnoStr = String(turno).toUpperCase();
-        console.log('Buscando reserva por datos:', { usuarioId: usuarioIdNum, fechaInicio: inicioDia, fechaFin: finDia, turno: turnoStr, quinchoId: quinchoIdNum });
-        reserva = await prisma.reserva.findFirst({
-          where: {
-            usuarioId: usuarioIdNum,
-            turno: turnoStr,
-            fecha: {
-              gte: inicioDia,
-              lte: finDia,
-            },
-            parrilla: {
-              quinchoId: quinchoIdNum
-            }
-          },
-          include: {
-            parrilla: {
-              include: {
-                quincho: true
-              }
-            }
-          }
-        });
-      }
-
-      // Si no se encontró o no se especificó turno, buscar sin restricción de turno
-      if (!reserva) {
-        console.log('Buscando reserva por usuario/quinchoId/fecha sin restricción de turno (fallback automático)');
-        reserva = await prisma.reserva.findFirst({
-          where: {
-            usuarioId: usuarioIdNum,
-            fecha: {
-              gte: inicioDia,
-              lte: finDia,
-            },
-            parrilla: {
-              quinchoId: quinchoIdNum
-            }
-          },
-          include: {
-            parrilla: {
-              include: {
-                quincho: true
-              }
-            }
-          }
-        });
-        if (reserva) {
-          console.log('Reserva encontrada en fallback automático por quincho:', {
-            id: reserva.id,
-            quinchoId: reserva.parrilla.quinchoId,
-            turno: reserva.turno,
-            fecha: reserva.fecha
-          });
-        }
-      }
-
-      // Si aún no se encontró, buscar cualquier reserva del usuario para hoy
-      if (!reserva) {
-        console.log('Buscando reserva del usuario para hoy sin restricción de quincho (fallback final)');
-        reserva = await prisma.reserva.findFirst({
-          where: {
-            usuarioId: usuarioIdNum,
-            fecha: {
-              gte: inicioDia,
-              lte: finDia,
-            }
-          },
-          include: {
-            parrilla: {
-              include: {
-                quincho: true
-              }
-            }
-          }
-        });
-        if (reserva) {
-          console.log('Reserva encontrada en fallback final:', {
-            id: reserva.id,
-            quinchoId: reserva.parrilla.quinchoId,
-            turno: reserva.turno,
-            fecha: reserva.fecha
-          });
-        }
-      }
-
-      console.log('Resultado de búsqueda:', reserva ? 'Encontrada' : 'No encontrada');
-    }
-
-    console.log('Reserva encontrada:', reserva);
-
-    if (!reserva) {
-      return res.status(404).json({ error: "Reserva no encontrada para confirmar asistencia." });
-    }
-
-    // ✅ FIX: Usar getHoyArgentinaUTC() para comparar correctamente el día de la reserva
-    // con el día actual en hora Argentina, evitando el desfasaje después de las 21:00.
-    const hoyUTC = getHoyArgentinaUTC();
-    const reservaDayStart = new Date(reserva.fecha);
-    reservaDayStart.setUTCHours(0, 0, 0, 0);
-
-    if (reservaDayStart.getTime() !== hoyUTC.getTime()) {
-      return res.status(403).json({ 
-        error: `Esta reserva es para otro día. Solo puedes hacer checkin el día de la reserva.` 
-      });
-    }
-
-    if (reserva.estado === "PRESENTADO") {
-      return res.status(400).json({ error: "La asistencia ya fue confirmada." });
-    }
-
-    if (reserva.estado === "AUSENTE") {
-      return res.status(400).json({ error: "Ya venció el tiempo de checkin. La asistencia quedó como inasistencia." });
-    }
-
-    // Validar que se está dentro de la ventana de escaneo permitida
-    const qrValidation = canScanQR(reserva.fecha, reserva.turno);
-    if (!qrValidation.canScan) {
-      return res.status(403).json({ error: qrValidation.reason });
-    }
-
-    await prisma.reserva.update({
-      where: { id: reserva.id },
-      data: { estado: "PRESENTADO" }
-    });
-
-    res.json({ message: "¡Asistencia confirmada! Que disfrutes el quincho." });
-  } catch (error) {
-    console.error("Error al confirmar asistencia:", error);
-    res.status(500).json({ error: "Error al confirmar asistencia." });
-  }
-});
-
-
-// --- RUTA PARA CONFIRMACIÓN MANUAL (ADMIN) ---
 app.patch('/api/reservas/confirmar-manual', isAdmin, async (req, res) => {
   const { fecha, turno, quinchoId } = req.body;
-
   try {
-    // 1. Normalizar la fecha para la búsqueda
     const fechaFiltro = new Date(fecha + "T00:00:00Z");
-
-    // 2. Buscar la reserva
-    // Buscamos una reserva en esa fecha, turno y que pertenezca a una parrilla de ese quincho
-    const reserva = await prisma.reserva.findFirst({
-      where: {
-        fecha: fechaFiltro,
-        turno: turno,
-        parrilla: {
-          quinchoId: parseInt(quinchoId)
-        }
-      }
+    const reserva     = await prisma.reserva.findFirst({
+      where: { fecha: fechaFiltro, turno, parrilla: { quinchoId: parseInt(quinchoId) } },
     });
+    if (!reserva) return res.status(404).json({ error: "No se encontró ninguna reserva para confirmar." });
 
-    if (!reserva) {
-      return res.status(404).json({ error: "No se encontró ninguna reserva para confirmar." });
-    }
-
-    // 3. Actualizar el estado a PRESENTADO
-    await prisma.reserva.update({
-      where: { id: reserva.id },
-      data: { estado: "PRESENTADO" }
-    });
-
-    res.json({ message: "Asistencia confirmada manualmente con éxito." });
-  } catch (error) {
-    console.error("Error en confirmación manual:", error);
-    res.status(500).json({ error: "Error interno al confirmar asistencia." });
+    await prisma.reserva.update({ where: { id: reserva.id }, data: { estado: 'PRESENTADO' } });
+    res.json({ message: "Asistencia confirmada manualmente." });
+  } catch (err) {
+    console.error("Error confirmación manual:", err);
+    res.status(500).json({ error: "Error interno." });
   }
 });
-
-// --- RUTA PARA EL BUSCADOR DEL PANEL ADMIN ---
 
 app.get('/api/admin/reservas', isAdmin, async (req, res) => {
   const { fecha, turno } = req.query;
-
   try {
     await markOverdueReservations();
 
     const inicioDia = new Date(fecha + "T00:00:00Z");
-    const finDia = new Date(fecha + "T23:59:59Z");
-
-    const whereClause = {
-      fecha: {
-        gte: inicioDia,
-        lte: finDia
-      }
-    };
-
-    if (turno) {
-      whereClause.turno = turno;
-    }
+    const finDia    = new Date(fecha + "T23:59:59Z");
+    const where     = { fecha: { gte: inicioDia, lte: finDia } };
+    if (turno) where.turno = turno;
 
     const reservas = await prisma.reserva.findMany({
-      where: whereClause,
+      where,
       include: {
-        usuario: {
-          select: {
-            nombre: true,
-            apellido: true,
-            dni: true
-          }
-        },
-        parrilla: {
-          include: {
-            quincho: true
-          }
-        }
-      }
+        usuario: { select: { nombre: true, apellido: true, dni: true } },
+        parrilla: { include: { quincho: true } },
+      },
     });
-
     res.json(reservas);
-  } catch (error) {
-    console.error("Error al buscar reservas para admin:", error);
+  } catch (err) {
+    console.error("Error admin/reservas:", err);
     res.status(500).json({ error: "Error al obtener las reservas." });
   }
 });
 
-// --- RUTA PARA BUSCAR USUARIO EN PANEL ADMIN ---
 app.get('/api/admin/usuarios/search', isAdmin, async (req, res) => {
   const { query } = req.query;
-
   try {
     await markOverdueReservations();
     const usuario = await prisma.usuario.findFirst({
       where: {
         OR: [
-          { email: { contains: query, mode: 'insensitive' } },
-          { apellido: { contains: query, mode: 'insensitive' } }
-        ]
-      }
+          { email:    { contains: query, mode: 'insensitive' } },
+          { apellido: { contains: query, mode: 'insensitive' } },
+        ],
+      },
     });
-
-    if (!usuario) {
-      return res.status(404).json({ error: "Usuario no encontrado." });
-    }
+    if (!usuario) return res.status(404).json({ error: "Usuario no encontrado." });
 
     const history = await prisma.reserva.findMany({
-      where: { usuarioId: usuario.id },
-      select: {
-        fecha: true,
-        estado: true
-      },
-      orderBy: { fecha: 'desc' }
+      where:   { usuarioId: usuario.id },
+      select:  { fecha: true, estado: true },
+      orderBy: { fecha: 'desc' },
     });
-
     res.json({
-      user: {
-        id: usuario.id,
-        nombre: usuario.nombre,
-        apellido: usuario.apellido,
-        email: usuario.email,
-        suspendido: usuario.suspendido
-      },
-      history: history.map(h => ({
-        fecha: h.fecha.toISOString().split('T')[0],
-        asistio: h.estado === 'PRESENTADO'
-      }))
+      user: { id: usuario.id, nombre: usuario.nombre, apellido: usuario.apellido, email: usuario.email, suspendido: usuario.suspendido },
+      history: history.map(h => ({ fecha: h.fecha.toISOString().split('T')[0], asistio: h.estado === 'PRESENTADO' })),
     });
-  } catch (error) {
-    console.error("Error al buscar usuario:", error);
+  } catch (err) {
+    console.error("Error search usuarios:", err);
     res.status(500).json({ error: "Error al buscar usuario." });
   }
 });
 
-// --- RUTA PARA SUSPENDER/LEVANTAR SUSPENSIÓN ---
-app.post('/api/admin/usuarios/:id/suspension', isAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { suspended } = req.body;
+// ⚠️  IMPORTANTE: /api/admin/usuarios/search debe ir ANTES que /api/admin/usuarios/:id
+//     por el mismo motivo que checkin: Express leería "search" como el :id.
 
+app.post('/api/admin/usuarios/:id/suspension', isAdmin, async (req, res) => {
+  const { suspended } = req.body;
   try {
     await prisma.usuario.update({
-      where: { id: parseInt(id) },
-      data: { suspendido: suspended }
+      where: { id: parseInt(req.params.id) },
+      data:  { suspendido: suspended },
     });
-
     res.json({ message: "Estado de suspensión actualizado." });
-  } catch (error) {
-    console.error("Error al actualizar suspensión:", error);
+  } catch (err) {
+    console.error("Error suspensión:", err);
     res.status(500).json({ error: "Error al actualizar suspensión." });
   }
-});
-
-
-// Ejemplo de una ruta protegida
-app.get('/api/admin/estadisticas', isAdmin, async (req, res) => {
-  // Solo llega acá si es ADMIN
-  const totalReservas = await prisma.reserva.count();
-  res.json({ totalReservas });
 });
 
 app.get('/api/admin/usuarios', isAdmin, async (req, res) => {
   try {
     const usuarios = await prisma.usuario.findMany({
-      select: {
-        id: true,
-        nombre: true,
-        apellido: true,
-        dni: true,
-        telefono: true,
-        email: true,
-        role: true,
-        suspendido: true
-      },
-      orderBy: { apellido: 'asc' }
+      select:  { id: true, nombre: true, apellido: true, dni: true, telefono: true, email: true, role: true, suspendido: true },
+      orderBy: { apellido: 'asc' },
     });
     res.json(usuarios);
-  } catch (error) {
-    console.error('Error fetching usuarios:', error);
-    res.status(500).json({ error: 'Error interno del servidor' });
+  } catch (err) {
+    console.error("Error usuarios:", err);
+    res.status(500).json({ error: "Error interno del servidor." });
   }
 });
 
+app.get('/api/admin/estadisticas', isAdmin, async (req, res) => {
+  const totalReservas = await prisma.reserva.count();
+  res.json({ totalReservas });
+});
+
+// ─── START ────────────────────────────────────────────────────────────────────
 
 app.listen(3001, () => console.log("Server listo en http://localhost:3001"));

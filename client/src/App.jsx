@@ -1,103 +1,191 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ScanQrCode, User, Loader2, MapPin, LogOut, Settings } from 'lucide-react';
+import { ScanQrCode, User, Loader2, MapPin, LogOut, Settings, CalendarDays, Clock, CheckCircle2, XCircle, Circle } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import QrCode from 'react-qr-code';
 import AuthModal from './components/AuthModal';
 import AdminPanel from './components/AdminPanel';
 
+/* ── Estilos globales ─────────────────────────────────────────────────────── */
+const GlobalStyles = () => (
+  <style>{`
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root {
+      --white:     #ffffff;
+      --bg:        #f4f6f8;
+      --surface:   #ffffff;
+      --border:    #e2e6ea;
+      --border-md: #cdd3da;
+      --text:      #1a202c;
+      --text-md:   #4a5568;
+      --text-sm:   #718096;
+      --teal:      #0d9488;
+      --teal-lt:   #ccfbf1;
+      --teal-dk:   #0a7c72;
+      --amber:     #d97706;
+      --amber-lt:  #fef3c7;
+      --red:       #dc2626;
+      --red-lt:    #fee2e2;
+      --slate:     #64748b;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.05);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05);
+      --shadow-lg: 0 10px 30px rgba(0,0,0,.1), 0 4px 8px rgba(0,0,0,.06);
+      --radius:    10px;
+      --radius-lg: 16px;
+    }
+
+    body { background: var(--bg); color: var(--text); font-family: 'Plus Jakarta Sans', sans-serif; }
+
+    @keyframes fadeUp { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes spin   { to { transform: rotate(360deg); } }
+
+    .fade-up { animation: fadeUp .45s cubic-bezier(.22,1,.36,1) both; }
+    .s1 { animation-delay:.05s; } .s2 { animation-delay:.1s; }
+    .s3 { animation-delay:.15s; }
+
+    input[type="date"] { color-scheme: light; }
+    input[type="date"]::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .6; }
+
+    .quincho-card {
+      transition: transform .25s cubic-bezier(.22,1,.36,1), box-shadow .25s ease;
+      cursor: pointer;
+    }
+    .quincho-card:hover:not(.occupied) {
+      transform: translateY(-3px);
+      box-shadow: var(--shadow-lg);
+    }
+    .quincho-card.occupied { cursor: default; }
+
+    .btn-primary {
+      background: var(--teal); color: #fff;
+      border: none; border-radius: var(--radius);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 700; font-size: 14px;
+      cursor: pointer;
+      transition: background .18s, transform .15s, box-shadow .18s;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: var(--teal-dk);
+      box-shadow: 0 4px 16px rgba(13,148,136,.28);
+    }
+    .btn-primary:active:not(:disabled) { transform: scale(.98); }
+    .btn-primary:disabled {
+      background: var(--border-md); color: var(--text-sm); cursor: not-allowed;
+    }
+
+    .nav-pill {
+      border-radius: 50px;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-weight: 600; font-size: 13px; cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      transition: filter .18s, transform .13s;
+    }
+    .nav-pill:active { transform: scale(.96); }
+    .nav-pill:hover  { filter: brightness(.93); }
+
+    /* Responsive */
+    @media (min-width: 1024px) {
+      .main-layout   { flex-direction: row !important; }
+      .desktop-show  { display: flex !important; }
+      .mobile-only   { display: none !important; }
+    }
+    @media (max-width: 1023px) {
+      .desktop-show  { display: none !important; }
+    }
+    @media (min-width: 768px) {
+      .grid-quinchos { grid-template-columns: repeat(3, 1fr) !important; }
+    }
+  `}</style>
+);
+
+/* ── Badge de estado ──────────────────────────────────────────────────────── */
+const StatusBadge = ({ isMyReservation, isOccupied, estado }) => {
+  let label, bg, color, Icon;
+  if (isMyReservation) {
+    if (estado === 'PRESENTADO')   { label = 'Disfrutando'; bg = 'var(--teal-lt)';  color = 'var(--teal-dk)'; Icon = CheckCircle2; }
+    else if (estado === 'AUSENTE') { label = 'Ausente';     bg = 'var(--red-lt)';   color = 'var(--red)';     Icon = XCircle; }
+    else                           { label = 'Tu reserva';  bg = 'var(--amber-lt)'; color = 'var(--amber)';   Icon = CheckCircle2; }
+  } else if (isOccupied) {
+    label = 'Ocupado'; bg = '#f1f5f9'; color = 'var(--slate)'; Icon = XCircle;
+  } else {
+    label = 'Disponible'; bg = 'var(--teal-lt)'; color = 'var(--teal-dk)'; Icon = Circle;
+  }
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '5px',
+      background: bg, color, borderRadius: '6px',
+      fontSize: '11px', fontWeight: 700, padding: '3px 9px',
+      letterSpacing: '.02em', textTransform: 'uppercase',
+    }}>
+      <Icon size={11} strokeWidth={2.5} />
+      {label}
+    </span>
+  );
+};
+
+/* ── App ──────────────────────────────────────────────────────────────────── */
 const App = () => {
   const API_BASE_URL = 'http://localhost:3001';
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
-  const [quinchos, setQuinchos] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [quinchos, setQuinchos]         = useState([]);
+  const [loading, setLoading]           = useState(true);
   const [selectedParrilla, setSelectedParrilla] = useState(null);
-  const [error, setError] = useState(null);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isScannerOpen, setIsScannerOpen] = useState(false);
-  const [scanError, setScanError] = useState(null);
-  const [showQrFor, setShowQrFor] = useState(null);
-  const [user, setUser] = useState(null);
-  const [turno, setTurno] = useState('NOCHE');
-  const [view, setView] = useState('MAPA');
+  const [error, setError]               = useState(null);
+  const [isAuthModalOpen, setIsAuthModalOpen]   = useState(false);
+  const [isScannerOpen, setIsScannerOpen]       = useState(false);
+  const [scanError, setScanError]       = useState(null);
+  const [showQrFor, setShowQrFor]       = useState(null);
+  const [user, setUser]                 = useState(null);
+  const [turno, setTurno]               = useState('NOCHE');
+  const [view, setView]                 = useState('MAPA');
   const scannerRef = useRef(null);
 
   useEffect(() => {
     const fetchEstado = async () => {
-      setLoading(true);
-      setError(null);
+      setLoading(true); setError(null);
       try {
         const response = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
         if (!response.ok) throw new Error("Error en la respuesta del servidor");
-        const data = await response.json();
-        setQuinchos(data);
-      } catch (error) {
-        setError("No se pudo conectar con el servidor.");
-      } finally {
-        setLoading(false);
-      }
+        setQuinchos(await response.json());
+      } catch { setError("No se pudo conectar con el servidor."); }
+      finally { setLoading(false); }
     };
     fetchEstado();
   }, [selectedDate, turno]);
 
-  const handleLoginSuccess = (userData) => {
-    setUser(userData);
-    setIsAuthModalOpen(false);
-  };
+  const handleLoginSuccess = (userData) => { setUser(userData); setIsAuthModalOpen(false); };
 
   const handleCancelar = async (reservaId) => {
     if (!window.confirm("¿Seguro que quieres cancelar tu reserva?")) return;
-    
     try {
-      const response = await fetch(`${API_BASE_URL}/api/reservas/${reservaId}`, {
-        method: 'DELETE'
-      });
-      const data = await response.json();
-      
-      if (response.ok) {
+      const res = await fetch(`${API_BASE_URL}/api/reservas/${reservaId}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
         alert("Reserva cancelada.");
-        // Refrescar datos
-        const resRefresh = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
-        setQuinchos(await resRefresh.json());
-      } else {
-        alert(data.error);
-      }
-    } catch (err) {
-      alert("Error al conectar con el servidor.");
-    }
+        const r = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
+        setQuinchos(await r.json());
+      } else { alert(data.error); }
+    } catch { alert("Error al conectar con el servidor."); }
   };
 
   const handleReserva = async () => {
     if (!selectedParrilla) return;
-    if (!user) {
-      setIsAuthModalOpen(true);
-      return;
-    }
-
+    if (!user) { setIsAuthModalOpen(true); return; }
     try {
-      const response = await fetch(`${API_BASE_URL}/api/reservas`, {
+      const res = await fetch(`${API_BASE_URL}/api/reservas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fecha: selectedDate,
-          usuarioId: user.id,
-          quinchoId: selectedParrilla.qId,
-          turno
-        }),
+        body: JSON.stringify({ fecha: selectedDate, usuarioId: user.id, quinchoId: selectedParrilla.qId, turno }),
       });
-
-      if (response.ok) {
+      if (res.ok) {
         alert(`¡Reserva confirmada! ${selectedParrilla.qNom}`);
         setSelectedParrilla(null);
-        const resRefresh = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
-        const dataRefresh = await resRefresh.json();
-        setQuinchos(dataRefresh);
-      } else {
-        const data = await response.json();
-        alert(data.error);
-      }
-    } catch (err) {
-      alert("Error al procesar la reserva");
-    }
+        const r = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
+        setQuinchos(await r.json());
+      } else { const d = await res.json(); alert(d.error); }
+    } catch { alert("Error al procesar la reserva"); }
   };
 
   const cleanupScanner = async () => {
@@ -107,405 +195,501 @@ const App = () => {
         await scannerRef.current.clear().catch(() => null);
         scannerRef.current = null;
       }
-      const element = document.getElementById('qr-reader');
-      if (element) element.innerHTML = '';
-    } catch (cleanupError) {
-      console.warn('Error limpiando el scanner:', cleanupError);
-    }
+      const el = document.getElementById('qr-reader');
+      if (el) el.innerHTML = '';
+    } catch (e) { console.warn('Error limpiando scanner:', e); }
   };
 
   const processCheckin = async (quinchoId) => {
-    console.log('Iniciando processCheckin para quinchoId:', quinchoId);
-    if (!user) {
-      alert("Debés iniciar sesión para confirmar asistencia.");
-      setIsScannerOpen(false);
-      return;
-    }
-
-    if (!navigator.geolocation) {
-      alert("Tu dispositivo no admite geolocalización.");
-      return;
-    }
-
+    if (!user) { alert("Debés iniciar sesión para confirmar asistencia."); setIsScannerOpen(false); return; }
+    if (!navigator.geolocation) { alert("Tu dispositivo no admite geolocalización."); return; }
     setScanError(null);
-
-    // Determinar automáticamente el turno basado en la hora actual (Argentina UTC-3)
     const ahora = new Date();
-    const horaArgentina = new Date(ahora.getTime() - 3 * 60 * 60 * 1000);
-    const horaActual = horaArgentina.getUTCHours();
-    const turnoAutomatico = (horaActual >= 11 && horaActual < 14) ? 'DIA' : 'NOCHE';
-    console.log(`Hora actual en Argentina: ${horaActual}:00 - Turno detectado: ${turnoAutomatico}`);
-
+    const horaArg = new Date(ahora.getTime() - 3 * 60 * 60 * 1000).getUTCHours();
+    const turnoAuto = (horaArg >= 11 && horaArg < 14) ? 'DIA' : 'NOCHE';
     try {
-      console.log('Obteniendo geolocalización...');
-      const position = await new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: true,
-          timeout: 15000,
-        });
-      });
+      const pos = await new Promise((res, rej) =>
+        navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 15000 })
+      );
+      const { latitude: lat, longitude: lon } = pos.coords;
 
-      const { latitude: lat, longitude: lon } = position.coords;
-      console.log('Geolocalización obtenida:', { lat, lon });
-      
-      console.log('Enviando petición de checkin con turno automático:', turnoAutomatico);
-      const fechaCheckin = new Date().toISOString().split('T')[0];
+      const fechaCheckin = new Date(ahora.getTime() - 3 * 60 * 60 * 1000).toISOString().split('T')[0];
+
       const response = await fetch(`${API_BASE_URL}/api/reservas/checkin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          usuarioId: user.id,
-          quinchoId,
-          fecha: fechaCheckin,
-          turno: turnoAutomatico,
-          lat,
-          lon,
-        }),
+        body: JSON.stringify({ usuarioId: user.id, quinchoId, fecha: fechaCheckin, turno: turnoAuto, lat, lon }),
       });
-
       const data = await response.json();
-      console.log('Respuesta del checkin:', { ok: response.ok, data });
-      
-      if (response.ok) {
-        alert(data.message);
-      } else {
-        alert(data.error || 'No se pudo confirmar asistencia.');
-      }
-    } catch (err) {
-      console.error('Error en processCheckin:', err);
-      setScanError(err.message || 'No se pudo obtener la ubicación.');
-    } finally {
-      console.log('Cerrando scanner...');
+      if (response.ok) alert(data.message);
+      else alert(data.error || 'No se pudo confirmar asistencia.');
+    } catch (err) { setScanError(err.message || 'No se pudo obtener la ubicación.'); }
+    finally {
       setIsScannerOpen(false);
       await cleanupScanner();
-      
-      // Delay the refresh to avoid conflicts
       setTimeout(async () => {
         try {
-          console.log('Refrescando datos...');
-          const resRefresh = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
-          if (resRefresh.ok) {
-            const dataRefresh = await resRefresh.json();
-            console.log('Datos refrescados exitosamente');
-            setQuinchos(dataRefresh);
-          } else {
-            console.error('Error en respuesta de refresh:', resRefresh.status);
-          }
-        } catch (refreshError) {
-          console.error('Error refreshing quinchos data:', refreshError);
-        }
+          const r = await fetch(`${API_BASE_URL}/api/estado-quinchos?fecha=${selectedDate}&turno=${turno}`);
+          if (r.ok) setQuinchos(await r.json());
+        } catch {}
       }, 1000);
     }
   };
 
   useEffect(() => {
     if (!isScannerOpen) return;
-
     let active = true;
-    const elementId = 'qr-reader';
-    const html5Qrcode = new Html5Qrcode(elementId);
+    const html5Qrcode = new Html5Qrcode('qr-reader');
     scannerRef.current = html5Qrcode;
-
     const onScanSuccess = async (decodedText) => {
-      if (!active) return;
-      active = false;
-
+      if (!active) return; active = false;
       try {
         const payload = JSON.parse(decodedText);
         if (payload?.type === 'quincho-checkin' && payload?.quinchoId) {
-          try {
-            await html5Qrcode.stop();
-            await html5Qrcode.clear();
-          } catch (error) {
-            console.warn('No se pudo detener/limpiar el scanner:', error);
-          }
+          try { await html5Qrcode.stop(); await html5Qrcode.clear(); } catch {}
           setIsScannerOpen(false);
           await processCheckin(payload.quinchoId);
-        } else {
-          setScanError('QR no reconocido. Usá el QR oficial del quincho.');
-          active = true;
-        }
-      } catch (err) {
-        setScanError('QR inválido. Intenta de nuevo.');
-        active = true;
-      }
+        } else { setScanError('QR no reconocido. Usá el QR oficial del quincho.'); active = true; }
+      } catch { setScanError('QR inválido. Intenta de nuevo.'); active = true; }
     };
-
-    const onScanError = () => {
-      // Ignoramos errores de lectura momentánea
-    };
-
     Html5Qrcode.getCameras()
       .then((cameras) => {
-        const backCamera = cameras?.find((camera) => camera.label.toLowerCase().includes('back'))?.id || cameras?.[0]?.id;
-        if (!backCamera) throw new Error('No se encontró cámara disponible');
-        return html5Qrcode.start(backCamera, { fps: 10, qrbox: 250 }, onScanSuccess, onScanError);
+        const cam = cameras?.find(c => c.label.toLowerCase().includes('back'))?.id || cameras?.[0]?.id;
+        if (!cam) throw new Error('No se encontró cámara');
+        return html5Qrcode.start(cam, { fps: 10, qrbox: 250 }, onScanSuccess, () => {});
       })
-      .catch((err) => {
-        setScanError(`No se pudo iniciar la cámara: ${err.message}`);
-      });
-
-    return () => {
-      active = false;
-      cleanupScanner().catch(() => null);
-    };
+      .catch(err => setScanError(`No se pudo iniciar la cámara: ${err.message}`));
+    return () => { active = false; cleanupScanner().catch(() => null); };
   }, [isScannerOpen]);
-
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const tokenGuardado = localStorage.getItem('token');
+    const token = localStorage.getItem('token');
     const userGuardado = localStorage.getItem('usuario');
-
-    if (tokenGuardado && userGuardado) {
-      setUser(JSON.parse(userGuardado));
-    }
+    if (token && userGuardado) setUser(JSON.parse(userGuardado));
   }, []);
 
-
   const handleLogout = () => {
-    setUser(null);
-    setView('MAPA');
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-      localStorage.removeItem('usuario');
-    }
-  }
+    setUser(null); setView('MAPA');
+    if (typeof window !== 'undefined') { localStorage.removeItem('token'); localStorage.removeItem('usuario'); }
+  };
 
+  const disponibles = quinchos.filter(q => !q.parrillas[0]?.reservas[0]).length;
+  const ocupados    = quinchos.filter(q =>  q.parrillas[0]?.reservas[0]).length;
 
   return (
-    <div className="min-h-screen bg-[#f8f9fa] font-sans text-slate-900 transition-colors">
-      {/* Navbar Minimalista */}
-      <nav className="bg-white/80 backdrop-blur-md border-stone-200 px-8 py-4 flex justify-between items-center sticky top-0 z-50">
-        <div className="flex items-center gap-3">
-          <div className="bg-emerald-600 p-2 rounded-xl shadow-lg shadow-emerald-100">
-            <MapPin className="text-white" size={20} />
-          </div>
-          <h1 className="text-xl font-black tracking-tighter text-slate-800">
-            PARRIS ALCA <span className="text-emerald-500">.</span>
-          </h1>
-        </div>
+    <>
+      <GlobalStyles />
+      <div style={{ minHeight: '100vh', background: 'var(--bg)', fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
 
-        <div className="flex items-center gap-2 lg:gap-3">
-          {/* Botón de Panel Admin */}
-          {user?.role === 'ADMIN' && (
-            <button 
-              onClick={() => setView(view === 'MAPA' ? 'ADMIN' : 'MAPA')}
-              className="flex items-center justify-center gap-0 lg:gap-2 bg-amber-500 text-white p-2.5 lg:px-4 lg:py-2.5 rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg shadow-amber-100 hover:bg-amber-400 transition-all"
-              title={view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+        {/* ── NAVBAR ─────────────────────────────────────────────────────── */}
+        <nav style={{
+          background: 'var(--white)', borderBottom: '1px solid var(--border)',
+          padding: '0 1.5rem', height: '62px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          position: 'sticky', top: 0, zIndex: 50,
+          boxShadow: '0 1px 4px rgba(0,0,0,.06)',
+        }}>
+          {/* Logo */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '36px', height: '36px', borderRadius: '10px',
+              background: 'var(--teal)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 2px 8px rgba(13,148,136,.3)',
+            }}>
+              <MapPin size={18} color="#fff" />
+            </div>
+            <div>
+              <span style={{ fontSize: '17px', fontWeight: 800, color: 'var(--text)', letterSpacing: '-.01em' }}>
+                Parris Alca
+              </span>
+              <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-sm)', marginLeft: '6px' }}>
+                Quinchos
+              </span>
+            </div>
+          </div>
+
+          {/* Acciones */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {user?.role === 'ADMIN' && (
+              <button
+                onClick={() => setView(view === 'MAPA' ? 'ADMIN' : 'MAPA')}
+                className="nav-pill"
+                title={view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+                style={{ background: 'var(--amber-lt)', color: 'var(--amber)', border: 'none', padding: '8px 16px' }}
+              >
+                <Settings size={15} />
+                <span className="desktop-show" style={{ display: 'none' }}>
+                  {view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+                </span>
+              </button>
+            )}
+
+            <button
+              onClick={() => setIsScannerOpen(true)}
+              className="nav-pill"
+              style={{ background: 'var(--teal)', color: '#fff', border: 'none', padding: '8px 18px' }}
             >
-              <Settings size={18} />
-              <span className="hidden lg:inline">
-                {view === 'MAPA' ? 'Panel Admin' : 'Ver Mapa'}
+              <ScanQrCode size={15} />
+              <span className="desktop-show" style={{ display: 'none' }}>Escanear QR</span>
+            </button>
+
+            <button
+              onClick={() => !user && setIsAuthModalOpen(true)}
+              className="nav-pill"
+              style={{
+                background: user ? 'var(--bg)' : 'var(--text)',
+                color: user ? 'var(--text-md)' : '#fff',
+                border: user ? '1.5px solid var(--border-md)' : 'none',
+                padding: '8px 16px',
+                cursor: user ? 'default' : 'pointer',
+              }}
+            >
+              <User size={15} />
+              <span className="desktop-show" style={{ display: 'none' }}>
+                {user ? user.nombre : 'Ingresar'}
               </span>
             </button>
-          )}
 
-          {/* Botón de QR */}
-          <button
-            onClick={() => setIsScannerOpen(true)}
-            className="flex items-center justify-center gap-0 lg:gap-2 bg-emerald-600 text-white p-2.5 lg:px-5 lg:py-2.5 rounded-full hover:bg-emerald-500 transition-all font-bold shadow-xl shadow-emerald-200"
-            title="Escanear QR"
-          >
-            <ScanQrCode size={18} />
-            <span className="hidden lg:inline text-sm">ESCANEAR QR</span>
-          </button>
-          
-          {/* BOTÓN DE USUARIO / LOGOUT */}
-          <div className="flex items-center gap-1 lg:gap-2">
-            <button 
-              onClick={() => !user && setIsAuthModalOpen(true)}
-              className="flex items-center justify-center gap-0 lg:gap-2 bg-slate-900 text-white p-2.5 lg:px-6 lg:py-2.5 rounded-full hover:bg-slate-800 transition-all font-bold shadow-xl shadow-slate-200"
-              title={user ? `Hola, ${user.nombre}` : 'Ingresar'}
-            >
-              <User size={18} />
-              <span className="hidden lg:inline text-sm">{user ? `Hola, ${user.nombre}` : 'INGRESAR'}</span>
-            </button>
-
-            {/* Botón de Cerrar Sesión: Solo aparece si hay usuario */}
             {user && (
-              <button 
+              <button
                 onClick={handleLogout}
-                title="Cerrar Sesión"
-                className="p-2.5 bg-rose-100 text-rose-600 rounded-full hover:bg-rose-200 transition-all shadow-md"
+                title="Cerrar sesión"
+                className="nav-pill"
+                style={{ background: 'var(--red-lt)', color: 'var(--red)', border: 'none', padding: '8px 10px' }}
               >
-                <LogOut size={18} />
+                <LogOut size={15} />
               </button>
             )}
           </div>
-        </div>
-      </nav>
+        </nav>
 
-      <main className="max-w-[1600px] mx-auto p-6">
-        {view === 'ADMIN' ? (
-          /* VISTA DE ADMINISTRADOR */
-          <AdminPanel API_BASE_URL={API_BASE_URL} />
-        ) : (
-          /* VISTA DEL MAPA (Lo que ya tenías) */
-          <div className="flex flex-col lg:flex-row gap-8">
-            
-            {/* Panel de Control Lateral */}
-            <div className="lg:w-3/12 space-y-6">
-              <div className="bg-white p-8 rounded-[2rem] shadow-xl shadow-slate-100 border border-stone-100">
-                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-4 block">
-                  1. Seleccionar Fecha
-                </label>
-                <input 
-                  type="date" 
-                  className="w-full p-4 bg-stone-50 border-2 border-stone-100 rounded-2xl focus:border-emerald-500 outline-none transition-all font-bold text-slate-700"
-                  value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDate(e.target.value);
-                    setSelectedParrilla(null);
+        {/* ── MAIN ───────────────────────────────────────────────────────── */}
+        <main style={{ maxWidth: '1600px', margin: '0 auto', padding: '2rem 1.5rem' }}>
+          {view === 'ADMIN' ? (
+            <AdminPanel API_BASE_URL={API_BASE_URL} />
+          ) : (
+            <div className="main-layout" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+              {/* ── SIDEBAR ────────────────────────────────────────────── */}
+              <div style={{ flex: '0 0 288px' }} className="fade-up s1">
+                <div style={{
+                  background: 'var(--surface)', borderRadius: 'var(--radius-lg)',
+                  border: '1px solid var(--border)', boxShadow: 'var(--shadow-sm)',
+                  padding: '1.75rem', position: 'sticky', top: '78px',
+                }}>
+                  <h2 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text)', marginBottom: '1.5rem' }}>
+                    Nueva Reserva
+                  </h2>
+
+                  {/* Fecha */}
+                  <div style={{ marginBottom: '1.25rem' }}>
+                    <label style={{
+                      display: 'flex', alignItems: 'center', gap: '5px',
+                      fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)',
+                      textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '7px',
+                    }}>
+                      <CalendarDays size={12} /> Fecha
+                    </label>
+                    <input
+                      type="date"
+                      value={selectedDate}
+                      onChange={(e) => { setSelectedDate(e.target.value); setSelectedParrilla(null); }}
+                      style={{
+                        width: '100%', padding: '10px 12px',
+                        border: '1.5px solid var(--border)', borderRadius: 'var(--radius)',
+                        fontSize: '14px', fontWeight: 600, color: 'var(--text)',
+                        fontFamily: "'Plus Jakarta Sans', sans-serif",
+                        outline: 'none', background: 'var(--bg)',
+                        transition: 'border-color .18s',
+                      }}
+                      onFocus={e => e.target.style.borderColor = 'var(--teal)'}
+                      onBlur={e  => e.target.style.borderColor = 'var(--border)'}
+                    />
+                  </div>
+
+                  {/* Turno */}
+                  <div style={{ marginBottom: '1.75rem' }}>
+                    <label style={{
+                      display: 'flex', alignItems: 'center', gap: '5px',
+                      fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)',
+                      textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '7px',
+                    }}>
+                      <Clock size={12} /> Turno
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      {['DIA', 'NOCHE'].map(t => (
+                        <button
+                          key={t}
+                          onClick={() => setTurno(t)}
+                          style={{
+                            flex: 1, padding: '10px 6px', borderRadius: 'var(--radius)',
+                            border: turno === t ? '1.5px solid var(--teal)' : '1.5px solid var(--border)',
+                            background: turno === t ? 'var(--teal-lt)' : 'var(--bg)',
+                            color: turno === t ? 'var(--teal-dk)' : 'var(--text-sm)',
+                            fontSize: '13px', fontWeight: 700, cursor: 'pointer',
+                            fontFamily: "'Plus Jakarta Sans', sans-serif",
+                            transition: 'all .18s',
+                          }}
+                        >
+                          {t === 'DIA' ? 'Almuerzo' : 'Cena'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Selección */}
+                  <div style={{
+                    background: selectedParrilla ? 'var(--teal-lt)' : 'var(--bg)',
+                    borderRadius: 'var(--radius)', padding: '14px 16px',
+                    border: `1.5px solid ${selectedParrilla ? 'rgba(13,148,136,.3)' : 'var(--border)'}`,
+                    marginBottom: '1.25rem', transition: 'all .25s', minHeight: '72px',
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '5px', color: selectedParrilla ? 'var(--teal-dk)' : 'var(--text-sm)' }}>
+                      Selección
+                    </div>
+                    <div style={{ fontSize: '16px', fontWeight: 700, color: selectedParrilla ? 'var(--teal-dk)' : 'var(--text-sm)' }}>
+                      {selectedParrilla ? selectedParrilla.qNom : 'Elegí un quincho del mapa'}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleReserva}
+                    disabled={!selectedParrilla || loading}
+                    className="btn-primary"
+                    style={{ width: '100%', padding: '13px' }}
+                  >
+                    Confirmar Reserva
+                  </button>
+
+                  {/* Leyenda */}
+                  <div style={{ marginTop: '1.75rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border)' }}>
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: '10px' }}>
+                      Referencias
+                    </p>
+                    {[
+                      { dot: 'var(--teal)',  bg: 'var(--teal-lt)',  label: 'Disponible' },
+                      { dot: 'var(--amber)', bg: 'var(--amber-lt)', label: 'Tu reserva' },
+                      { dot: 'var(--slate)', bg: '#f1f5f9',         label: 'Ocupado'    },
+                    ].map(({ dot, bg, label }) => (
+                      <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px' }}>
+                        <span style={{ width: '10px', height: '10px', borderRadius: '3px', background: bg, border: `1.5px solid ${dot}`, flexShrink: 0 }} />
+                        <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-md)' }}>{label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── MAPA ──────────────────────────────────────────────── */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+
+                {/* Cabecera */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '1.25rem' }} className="fade-up s2">
+                  <div>
+                    <h1 style={{ fontSize: 'clamp(20px, 3vw, 26px)', fontWeight: 800, color: 'var(--text)', letterSpacing: '-.02em', lineHeight: 1.2 }}>
+                      Plano de Quinchos
+                    </h1>
+                    <p style={{ fontSize: '13px', color: 'var(--text-sm)', fontWeight: 500, marginTop: '2px' }}>
+                      {turno === 'DIA' ? 'Almuerzo' : 'Cena'} · {selectedDate}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <span style={{ background: 'var(--teal-lt)', color: 'var(--teal-dk)', borderRadius: '50px', padding: '5px 14px', fontSize: '12px', fontWeight: 700 }}>
+                      {disponibles} disponibles
+                    </span>
+                    <span style={{ background: '#f1f5f9', color: 'var(--slate)', borderRadius: '50px', padding: '5px 14px', fontSize: '12px', fontWeight: 700 }}>
+                      {ocupados} ocupados
+                    </span>
+                  </div>
+                </div>
+
+                {/* Mapa */}
+                <div
+                  className="fade-up s3"
+                  style={{
+                    background: '#e8efe9',
+                    borderRadius: 'var(--radius-lg)',
+                    border: '1px solid #d4dfd5',
+                    boxShadow: 'inset 0 2px 8px rgba(0,0,0,.04)',
+                    padding: 'clamp(1.25rem, 3vw, 2.5rem)',
+                    minHeight: '460px', position: 'relative', overflow: 'hidden',
                   }}
-                />
-
-                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-8 mb-4 block">
-                  2. Elegir Turno
-                </label>
-                <div className="flex gap-2 p-1.5 bg-stone-100 rounded-2xl">
-                  <button 
-                    onClick={() => setTurno('DIA')}
-                    className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'DIA' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-                  >
-                    ALMUERZO
-                  </button>
-                  <button 
-                    onClick={() => setTurno('NOCHE')}
-                    className={`flex-1 py-3 rounded-xl text-xs font-black transition-all ${turno === 'NOCHE' ? 'bg-white shadow-md text-emerald-600' : 'text-slate-400 hover:text-slate-600'}`}
-                  >
-                    CENA
-                  </button>
-                </div>
-
-                <div className="mt-10 p-6 rounded-2xl bg-emerald-50/50 border border-emerald-100/50">
-                   <span className="text-[10px] font-black text-emerald-800 uppercase tracking-widest block mb-2">Selección</span>
-                   <p className="text-emerald-900 font-bold text-lg">
-                    {selectedParrilla ? selectedParrilla.qNom : "Elegí un quincho"}
-                   </p>
-                </div>
-
-                <button 
-                  onClick={handleReserva}
-                  disabled={!selectedParrilla || loading}
-                  className={`w-full mt-6 py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all ${
-                    selectedParrilla 
-                    ? 'bg-emerald-600 text-white shadow-2xl shadow-emerald-200 hover:translate-y-[-2px] active:translate-y-[0px]' 
-                    : 'bg-stone-200 text-stone-400 cursor-not-allowed'
-                  }`}
                 >
-                  Confirmar Reserva
-                </button>
+                  {/* Vía del tren — desktop (arriba) */}
+                  <div style={{
+                    position: 'absolute', top: '1.5rem', left: 0, right: 0,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    opacity: .2, pointerEvents: 'none', zIndex: 0,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '90%', height: '2px', background: '#4a5568' }}>
+                      {[...Array(26)].map((_, i) => (
+                        <div key={i} style={{ width: '1px', height: '10px', background: '#4a5568', transform: 'translateY(-4px)' }} />
+                      ))}
+                    </div>
+                    <span style={{ fontSize: '9px', fontWeight: 700, letterSpacing: '.3em', color: '#4a5568', marginTop: '5px', textTransform: 'uppercase' }}>
+                      Vías del Ferrocarril
+                    </span>
+                  </div>
+
+                  {/* Vía — mobile (lateral derecha) */}
+                  <div style={{
+                    position: 'absolute', top: 0, bottom: 0, right: '0.75rem',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center',
+                    justifyContent: 'center', opacity: .18, pointerEvents: 'none', zIndex: 0,
+                  }}
+                    className="mobile-only"
+                  >
+                    <div style={{ width: '1px', height: '85%', background: '#4a5568', position: 'relative' }}>
+                      {[...Array(16)].map((_, i) => (
+                        <div key={i} style={{ position: 'absolute', top: `${(i / 15) * 100}%`, left: '-5px', width: '11px', height: '1px', background: '#4a5568' }} />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Contenido */}
+                  <div style={{ position: 'relative', zIndex: 1, paddingTop: '2.5rem' }}>
+                    {loading ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px', gap: '14px' }}>
+                        <div style={{ width: '38px', height: '38px', border: '3px solid var(--teal-lt)', borderTopColor: 'var(--teal)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                        <p style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-sm)' }}>Cargando quinchos...</p>
+                      </div>
+                    ) : error ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px', gap: '14px' }}>
+                        <p style={{ fontSize: '14px', fontWeight: 600, color: 'var(--red)' }}>{error}</p>
+                        <button onClick={() => window.location.reload()} className="btn-primary" style={{ padding: '9px 20px' }}>
+                          Reintentar
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        className="grid-quinchos"
+                        style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1rem' }}
+                      >
+                        {quinchos.map((q, idx) => {
+                          const reservaEnQuincho = q.parrillas[0]?.reservas[0];
+                          const isOccupied       = !!reservaEnQuincho;
+                          const isMyReservation  = user && reservaEnQuincho?.usuarioId === user.id;
+                          const isSelected       = selectedParrilla?.qId === q.id;
+
+                          let borderColor = 'var(--border)';
+                          let bgCard      = 'var(--white)';
+                          let topBar      = 'var(--teal)';
+                          let shadow      = 'var(--shadow-sm)';
+
+                          if (isMyReservation) {
+                            bgCard = 'var(--teal-lt)'; borderColor = 'rgba(13,148,136,.4)'; topBar = 'var(--teal-dk)'; shadow = 'var(--shadow-md)';
+                          } else if (isSelected) {
+                            borderColor = 'var(--teal)'; shadow = '0 0 0 3px rgba(13,148,136,.15), var(--shadow-md)';
+                          } else if (isOccupied) {
+                            bgCard = '#f8fafc'; topBar = '#cbd5e1';
+                          }
+
+                          return (
+                            <div
+                              key={q.id}
+                              className={`quincho-card fade-up${isOccupied && !isMyReservation ? ' occupied' : ''}`}
+                              style={{ animationDelay: `${idx * .07 + .2}s`, opacity: 0, animationFillMode: 'forwards' }}
+                              onClick={() => !isOccupied && setSelectedParrilla({ qId: q.id, qNom: q.nombre })}
+                            >
+                              <div style={{
+                                background: bgCard,
+                                border: `1.5px solid ${borderColor}`,
+                                borderRadius: 'var(--radius-lg)',
+                                boxShadow: shadow,
+                                overflow: 'hidden',
+                                transition: 'border-color .2s, box-shadow .2s',
+                                opacity: isOccupied && !isMyReservation ? .6 : 1,
+                              }}>
+                                <div style={{ height: '4px', background: topBar }} />
+                                <div style={{ padding: '1rem 1.25rem' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                                    <StatusBadge isMyReservation={isMyReservation} isOccupied={isOccupied} estado={reservaEnQuincho?.estado} />
+                                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-sm)', background: 'rgba(0,0,0,.05)', borderRadius: '6px', padding: '2px 8px' }}>
+                                      #{String(q.numero).padStart(2, '0')}
+                                    </span>
+                                  </div>
+                                  <h3 style={{ fontSize: 'clamp(15px, 2vw, 18px)', fontWeight: 800, color: 'var(--text)', letterSpacing: '-.01em' }}>
+                                    {q.nombre}
+                                  </h3>
+                                  {isMyReservation && reservaEnQuincho?.estado !== 'PRESENTADO' && (
+                                    <button
+                                      onClick={(e) => { e.stopPropagation(); handleCancelar(reservaEnQuincho.id); }}
+                                      style={{
+                                        marginTop: '10px', background: 'none', border: 'none',
+                                        color: 'var(--red)', fontFamily: "'Plus Jakarta Sans', sans-serif",
+                                        fontSize: '12px', fontWeight: 700, cursor: 'pointer', padding: 0,
+                                        textDecoration: 'underline',
+                                      }}
+                                    >
+                                      Cancelar reserva
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
+          )}
+        </main>
 
-            {/* El Mapa Interactivo */}
-            <div className="lg:w-9/12">
-              <div className="relative bg-[#e9f0e6] rounded-[2rem] lg:rounded-[3rem] p-4 md:p-12 h-full shadow-inner overflow-hidden border-4 lg:border-8 border-white">
-                
-                {/* Vía del Tren */}
-                <div className="absolute top-6 left-0 w-full h-auto flex flex-col items-center lg:top-12 lg:flex-col max-lg:right-0 max-lg:left-auto max-lg:w-8 max-lg:h-full max-lg:top-0 max-lg:justify-center opacity-20 pointer-events-none z-0">
-                    <div className="flex justify-between w-[90%] h-[2px] bg-slate-600 lg:w-full lg:flex-row max-lg:h-[90%] max-lg:w-[1px] max-lg:flex-col max-lg:px-0 max-lg:py-4">
-                        {[...Array(25)].map((_, i) => (
-                          <div key={i} className="bg-slate-600 w-[1px] h-3 -translate-y-1 max-lg:w-3 max-lg:h-[1px] max-lg:-translate-x-1"></div>
-                        ))}
-                    </div>
-                    <span className="text-[9px] font-black tracking-[0.3em] text-slate-700 uppercase lg:mt-4 max-lg:rotate-90 max-lg:whitespace-nowrap max-lg:absolute max-lg:right-2">
-                        Vías del Ferrocarril
-                    </span>
+        {/* ── MODAL SCANNER ─────────────────────────────────────────────── */}
+        {isScannerOpen && (
+          <div style={{
+            position: 'fixed', inset: 0, zIndex: 50,
+            background: 'rgba(15,23,42,.5)', backdropFilter: 'blur(6px)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+          }}>
+            <div style={{
+              background: 'var(--surface)', borderRadius: 'var(--radius-lg)',
+              border: '1px solid var(--border)', boxShadow: 'var(--shadow-lg)',
+              width: '100%', maxWidth: '480px', padding: '1.75rem',
+              animation: 'fadeUp .35s cubic-bezier(.22,1,.36,1)',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
+                <div>
+                  <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text)' }}>Check-in con QR</h2>
+                  <p style={{ fontSize: '13px', color: 'var(--text-sm)', marginTop: '3px' }}>Apuntá la cámara al QR del quincho</p>
                 </div>
-
-                {/* Contenido del Mapa */}
-                <div className="relative z-10 max-lg:pr-10 max-lg:pl-2 h-full flex flex-col justify-center">
-                  {loading ? (
-                    <div className="flex flex-col items-center justify-center flex-1 gap-4">
-                      <Loader2 className="animate-spin text-emerald-600" size={48} />
-                      <p className="text-slate-600 font-medium">Cargando quinchos...</p>
-                    </div>
-                  ) : error ? (
-                    <div className="flex flex-col items-center justify-center flex-1 gap-4">
-                      <p className="text-red-600 font-medium">{error}</p>
-                      <button 
-                        onClick={() => window.location.reload()} 
-                        className="bg-emerald-600 text-white px-4 py-2 rounded-full font-medium"
-                      >
-                        Reintentar
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-16">
-                      {quinchos.map((q) => {
-                        const reservaEnQuincho = q.parrillas[0]?.reservas[0]; 
-                        const isOccupied = !!reservaEnQuincho;
-                        const isMyReservation = user && reservaEnQuincho?.usuarioId === user.id;
-                        const isSelected = selectedParrilla?.qId === q.id;
-
-                        return (
-                          <div key={q.id} className="relative group mb-4 lg:mb-0 mx-1 md:mx-2">
-                            <div className={`absolute -bottom-2 left-1/2 -translate-x-1/2 w-[70%] h-4 bg-black/10 blur-lg rounded-full transition-all duration-500 ${isSelected ? 'scale-110 opacity-30' : 'scale-100 opacity-10'}`}></div>
-                            <div 
-                              onClick={() => !isOccupied && setSelectedParrilla({ qId: q.id, qNom: q.nombre })}
-                              className={`relative aspect-[21/9] md:aspect-[4/3] rounded-2xl lg:rounded-[2rem] transition-all duration-500 cursor-pointer flex flex-col items-center justify-center border-t-2 lg:border-t-4 p-2 md:p-4
-                                ${isMyReservation ? 'bg-emerald-50 border-emerald-500 shadow-lg ring-2 ring-emerald-200' : 
-                                  isOccupied ? 'bg-slate-200 border-slate-300 grayscale opacity-60' : 
-                                  isSelected ? 'bg-white border-emerald-500 scale-[1.02]' : 'bg-white/90 border-transparent'}
-                              `}
-                            >
-                              <div className={`text-[7px] md:text-[8px] font-black mb-1 uppercase tracking-widest text-center leading-tight ${isMyReservation ? 'text-emerald-600' : isOccupied ? 'text-slate-400' : 'text-emerald-500'}`}>
-                                {isMyReservation ? (reservaEnQuincho?.estado === 'PRESENTADO' ? 'Disfrutando de tu quincho' : reservaEnQuincho?.estado === 'AUSENTE' ? 'FALTA' : 'TU RESERVA') : isOccupied ? 'OCUPADO' : 'DISPONIBLE'}
-                              </div>
-                              <h3 className="text-sm md:text-base lg:text-xl font-black text-slate-800 uppercase text-center leading-tight px-1">{q.nombre}</h3>
-                              {isMyReservation && reservaEnQuincho?.estado !== 'PRESENTADO' && (
-                                <button 
-                                  onClick={(e) => { e.stopPropagation(); handleCancelar(reservaEnQuincho.id); }}
-                                  className="mt-1 md:mt-2 text-[9px] md:text-[10px] font-bold text-red-500 hover:text-red-700 underline uppercase tracking-tighter"
-                                >
-                                  Cancelar Reserva
-                                </button>
-                              )}
-                            </div>
-                            <div className="mt-2 lg:mt-4 text-center px-1">
-                                <span className="bg-emerald-800/10 px-2 md:px-3 py-0.5 rounded-full text-[7px] md:text-[8px] lg:text-[9px] font-black text-emerald-900/40 uppercase">
-                                    Quincho {q.numero}
-                                </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                <button
+                  onClick={async () => { await cleanupScanner(); setIsScannerOpen(false); }}
+                  style={{
+                    background: 'var(--bg)', border: '1.5px solid var(--border)', borderRadius: '8px',
+                    padding: '6px 14px', cursor: 'pointer', fontSize: '13px', fontWeight: 700,
+                    color: 'var(--text-md)', fontFamily: "'Plus Jakarta Sans', sans-serif",
+                  }}
+                >
+                  Cerrar
+                </button>
               </div>
+
+              <div style={{ borderRadius: 'var(--radius)', overflow: 'hidden', border: '1.5px solid var(--border)' }}>
+                <div id="qr-reader" style={{ width: '100%', height: '300px', background: '#000' }} />
+              </div>
+
+              {scanError && (
+                <div style={{ marginTop: '12px', background: 'var(--red-lt)', borderRadius: '8px', padding: '10px 14px', border: '1px solid rgba(220,38,38,.2)' }}>
+                  <p style={{ fontSize: '12px', fontWeight: 600, color: 'var(--red)' }}>{scanError}</p>
+                </div>
+              )}
             </div>
           </div>
         )}
-      </main>
 
-      {/* Modales (Scanner, QR y Auth) - Se mantienen fuera del main */}
-      {isScannerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="relative w-full max-w-2xl rounded-[2rem] bg-white p-6 shadow-2xl">
-            <button onClick={async () => {
-              await cleanupScanner();
-              setIsScannerOpen(false);
-            }} className="absolute right-4 top-4 text-slate-500 hover:text-slate-900">Cerrar</button>
-            <h2 className="text-xl font-bold text-slate-900 mb-4">Escaneá el QR del quincho</h2>
-            <div className="rounded-3xl overflow-hidden border border-slate-200 bg-slate-900">
-              <div id="qr-reader" className="w-full h-[360px] bg-black" />
-            </div>
-            {scanError && <p className="mt-4 text-sm text-red-600">{scanError}</p>}
-          </div>
-        </div>
-      )}
-
-
-
-      <AuthModal 
-        isOpen={isAuthModalOpen} 
-        onClose={() => setIsAuthModalOpen(false)} 
-        onLoginSuccess={handleLoginSuccess}
-      />
-    </div>
+        {/* ── AUTH MODAL ────────────────────────────────────────────────── */}
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onLoginSuccess={handleLoginSuccess}
+        />
+      </div>
+    </>
   );
 };
 
